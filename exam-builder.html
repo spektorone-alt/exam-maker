@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>מרכיב מבחנים אוטומטי</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<style>
+  :root{
+    --navy:#1b2a4a; --navy-dark:#101a30; --accent:#2f6fed; --bg:#f4f6fb;
+    --card:#ffffff; --border:#e2e6ef; --muted:#6b7280; --danger:#d64545; --good:#1f9d55;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:"Segoe UI","Arial",Tahoma,sans-serif; background:var(--bg); color:#1c2333;
+    direction:rtl;
+  }
+  header{
+    background:linear-gradient(135deg,var(--navy),var(--navy-dark)); color:#fff;
+    padding:28px 24px; text-align:center;
+  }
+  header h1{margin:0 0 6px; font-size:24px;}
+  header p{margin:0; opacity:.85; font-size:14px;}
+  .wrap{max-width:920px; margin:0 auto; padding:20px;}
+  .card{
+    background:var(--card); border:1px solid var(--border); border-radius:14px;
+    padding:20px; margin-bottom:20px; box-shadow:0 2px 10px rgba(20,30,60,.04);
+  }
+  .card h2{margin:0 0 14px; font-size:17px; display:flex; align-items:center; gap:8px;}
+  .step-num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:26px; height:26px; border-radius:50%; background:var(--accent); color:#fff;
+    font-size:13px; font-weight:bold;
+  }
+  .drop{
+    border:2px dashed #b9c3d9; border-radius:12px; padding:28px; text-align:center;
+    color:var(--muted); cursor:pointer; transition:.15s;
+  }
+  .drop.drag{background:#eef3ff; border-color:var(--accent);}
+  input[type=file]{display:none;}
+  .btn{
+    background:var(--accent); color:#fff; border:none; padding:10px 18px;
+    border-radius:8px; font-size:14px; cursor:pointer; font-weight:600;
+  }
+  .btn:hover{opacity:.92;}
+  .btn.secondary{background:#eef1f7; color:#1c2333;}
+  .btn.danger{background:#fdeaea; color:var(--danger);}
+  .btn:disabled{opacity:.5; cursor:not-allowed;}
+  table{width:100%; border-collapse:collapse; font-size:14px;}
+  th,td{padding:8px 6px; border-bottom:1px solid var(--border); text-align:right; vertical-align:middle;}
+  th{color:var(--muted); font-weight:600; font-size:12px;}
+  .thumb{
+    width:56px; height:72px; object-fit:cover; border:1px solid var(--border); border-radius:4px;
+    background:#f0f2f7;
+  }
+  .tag{
+    display:inline-block; background:#eef3ff; color:var(--accent); font-size:11px;
+    padding:2px 8px; border-radius:10px; margin-inline-start:6px;
+  }
+  .row-actions{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+  .status{font-size:13px; color:var(--muted); margin-top:8px;}
+  .status.err{color:var(--danger);}
+  .status.ok{color:var(--good);}
+  .num-input{
+    width:80px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:15px;
+  }
+  select{padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:14px;}
+  .flex-between{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;}
+  .muted{color:var(--muted); font-size:13px;}
+  .spinner{
+    display:inline-block; width:16px; height:16px; border:2px solid #ccc; border-top-color:var(--accent);
+    border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-left:6px;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .empty{text-align:center; color:var(--muted); padding:30px 10px; font-size:14px;}
+  .download-box{
+    background:#eefaf1; border:1px solid #c6ebd2; border-radius:10px; padding:16px; text-align:center;
+  }
+  .footer-note{font-size:12px; color:var(--muted); text-align:center; padding:10px;}
+  input[type=checkbox]{width:17px; height:17px; cursor:pointer;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🧮 מרכיב מבחנים אוטומטי</h1>
+  <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
+</header>
+
+<div class="wrap">
+
+  <!-- Step 1: Upload -->
+  <div class="card">
+    <div class="flex-between">
+      <h2><span class="step-num">1</span> העלאת מאגר מבחנים (PDF)</h2>
+      <button class="btn secondary" id="driveSettingsBtn" style="font-size:12px;">⚙️ הגדרות Google Drive</button>
+    </div>
+    <table style="margin-bottom:12px;">
+      <tr>
+        <td style="width:130px;">מקצוע / קורס:</td>
+        <td style="display:flex; gap:8px;">
+          <select id="subjectSelect" style="flex:1;"><option value="">— בחר מקצוע קיים —</option></select>
+          <input type="text" id="newSubjectInput" placeholder="או הקלד מקצוע חדש..." style="flex:1; padding:8px; border:1px solid var(--border); border-radius:6px;">
+        </td>
+      </tr>
+    </table>
+    <div class="drop" id="dropZone">
+      📄 גררו לכאן קבצי PDF, או לחצו לבחירה (אפשר לבחור כמה קבצים יחד)
+      <input type="file" id="fileInput" accept="application/pdf" multiple>
+    </div>
+    <div style="text-align:center; margin-top:12px;">
+      <button class="btn" id="driveImportBtn">📁 ייבוא מ-Google Drive</button>
+    </div>
+    <div class="status" id="uploadStatus"></div>
+  </div>
+
+  <!-- Google Drive settings modal -->
+  <div id="driveModalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(20,30,60,.45); z-index:50; align-items:center; justify-content:center;">
+    <div class="card" style="max-width:460px; width:90%; margin:0;">
+      <h2>⚙️ הגדרות חיבור ל-Google Drive</h2>
+      <p class="muted" style="line-height:1.7;">
+        כדי לייבא ישירות מ-Drive צריך OAuth Client ID + API Key מ-Google Cloud Console (פרויקט אישי שלכם):<br>
+        1. ב-Google Cloud Console: הפעילו את <b>Google Drive API</b> ואת <b>Google Picker API</b>.<br>
+        2. צרו <b>OAuth 2.0 Client ID</b> מסוג "Web application", והוסיפו כ-Authorized JavaScript origin את הכתובת שבה מתארחת האפליקציה הזו (למשל דף ב-GitHub Pages שלכם).<br>
+        3. צרו גם <b>API Key</b> (Credentials → Create → API key), והגבילו אותו ל-Picker API.
+      </p>
+      <table>
+        <tr><td style="width:110px;">Client ID</td><td><input type="text" id="clientIdInput" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;" placeholder="xxxxx.apps.googleusercontent.com"></td></tr>
+        <tr><td>API Key</td><td><input type="text" id="apiKeyInput" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;" placeholder="AIza..."></td></tr>
+      </table>
+      <div style="text-align:left; margin-top:14px; display:flex; gap:8px; justify-content:flex-end;">
+        <button class="btn secondary" id="driveModalCancel">ביטול</button>
+        <button class="btn" id="driveModalSave">שמירה</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Bank -->
+  <div class="card">
+    <div class="flex-between">
+      <h2><span class="step-num">2</span> בנק השאלות (<span id="bankCount">0</span> שאלות)</h2>
+      <div class="row-actions">
+        <select id="filterSubjectSelect" style="font-size:13px;"><option value="">כל המקצועות</option></select>
+        <button class="btn secondary" id="selectAllBtn">בחר הכל</button>
+        <button class="btn secondary" id="clearSelectBtn">נקה בחירה</button>
+        <button class="btn danger" id="clearBankBtn">מחק מאגר שמור</button>
+      </div>
+    </div>
+    <div id="bankTableWrap">
+      <div class="empty" id="bankEmpty">עדיין לא הועלו שאלות. העלו קבצי PDF למעלה.</div>
+    </div>
+  </div>
+
+  <!-- Step 3: Build exam -->
+  <div class="card">
+    <h2><span class="step-num">3</span> הרכבת מבחן חדש</h2>
+    <table style="margin-bottom:14px;">
+      <tr>
+        <td style="width:220px;">מקצוע לבניית המבחן ממנו:</td>
+        <td><select id="buildSubjectSelect"><option value="">— בחר מקצוע —</option></select></td>
+      </tr>
+      <tr>
+        <td style="width:220px;">עמוד שער / הוראות מתוך:</td>
+        <td><select id="coverSelect"><option value="">— ללא עמוד שער —</option></select></td>
+      </tr>
+      <tr>
+        <td>כמות שאלות במבחן החדש:</td>
+        <td><input type="number" id="numQuestions" class="num-input" min="1" value="5"></td>
+      </tr>
+    </table>
+    <button class="btn" id="generateBtn">🎲 הרכב מבחן אקראי</button>
+    <div class="status" id="generateStatus"></div>
+    <div id="downloadArea" style="margin-top:16px;"></div>
+  </div>
+
+  <div class="footer-note">
+    שימו לב: כל שאלה נשמרת ומועתקת כעמוד PDF מקורי (לא כתמונה) — כך שרטוטי המעגלים, הנוסחאות והפורמט נשמרים במדויק.
+    מספרי השאלות בגוף המסמך נשארים כפי שהיו במבחן המקור; טבלת הניקוד הכוללת בעמוד השער אינה מתעדכנת אוטומטית לפי הבחירה החדשה.
+    הבנק נשמר אוטומטית בדפדפן שלכם (אישי, לא משותף) כך שבפעם הבאה שתפתחו את האפליקציה הוא עדיין יהיה כאן.
+  </div>
+
+</div>
+
+<script>
+const { PDFDocument } = PDFLib;
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+
+let bank = [];      // {id, source, label, pages, base64, included, subject}
+let covers = [];    // {id, source, base64, subject}
+let subjects = [];  // string list
+
+const bankEmpty = document.getElementById('bankEmpty');
+const bankTableWrap = document.getElementById('bankTableWrap');
+const bankCountEl = document.getElementById('bankCount');
+const uploadStatus = document.getElementById('uploadStatus');
+const coverSelect = document.getElementById('coverSelect');
+const subjectSelect = document.getElementById('subjectSelect');
+const newSubjectInput = document.getElementById('newSubjectInput');
+const filterSubjectSelect = document.getElementById('filterSubjectSelect');
+const buildSubjectSelect = document.getElementById('buildSubjectSelect');
+
+function refreshSubjectDropdowns(){
+  const opts = subjects.map(s=>`<option value="${s}">${s}</option>`).join('');
+  subjectSelect.innerHTML = '<option value="">— בחר מקצוע קיים —</option>' + opts;
+  filterSubjectSelect.innerHTML = '<option value="">כל המקצועות</option>' + opts;
+  const prevBuild = buildSubjectSelect.value;
+  buildSubjectSelect.innerHTML = '<option value="">— בחר מקצוע —</option>' + opts;
+  if(subjects.includes(prevBuild)) buildSubjectSelect.value = prevBuild;
+}
+
+function currentSubjectForUpload(){
+  const typed = newSubjectInput.value.trim();
+  if(typed) return typed;
+  return subjectSelect.value || 'כללי';
+}
+
+function registerSubject(name){
+  if(name && !subjects.includes(name)){
+    subjects.push(name);
+  }
+}
+
+function arrayBufferToBase64(buffer){
+  let binary=''; const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  }
+  return btoa(binary);
+}
+function base64ToArrayBuffer(base64){
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+  return bytes.buffer;
+}
+function rangeArr(a,b){ const out=[]; for(let i=a;i<=b;i++) out.push(i); return out; }
+
+async function renderThumb(base64){
+  try{
+    const bytes = base64ToArrayBuffer(base64);
+    const doc = await pdfjsLib.getDocument({data: bytes}).promise;
+    const page = await doc.getPage(1);
+    const viewport = page.getViewport({scale: 0.35});
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width; canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({canvasContext: ctx, viewport}).promise;
+    return canvas.toDataURL('image/png');
+  }catch(e){ return null; }
+}
+
+async function parsePdfFile(file, subject){
+  const buf = await file.arrayBuffer();
+  const pdfjsDoc = await pdfjsLib.getDocument({data: buf.slice(0)}).promise;
+  const numPages = pdfjsDoc.numPages;
+  const headings = [];
+  for(let p=1;p<=numPages;p++){
+    const page = await pdfjsDoc.getPage(p);
+    const content = await page.getTextContent();
+    const text = content.items.map(i=>i.str).join(' ');
+    const m = text.match(/שאלה\s*(\d+)/) || text.match(/(\d+)\s*שאלה/);
+    if(m) headings.push({pageNum:p, num:m[1]});
+  }
+  let groups = [];
+  let coverPages = [];
+  if(headings.length){
+    coverPages = rangeArr(1, headings[0].pageNum-1);
+    for(let i=0;i<headings.length;i++){
+      const start = headings[i].pageNum;
+      const end = (i+1<headings.length) ? headings[i+1].pageNum-1 : numPages;
+      groups.push({label:'שאלה '+headings[i].num, pages: rangeArr(start,end)});
+    }
+  } else {
+    coverPages = numPages>1 ? [1] : [];
+    const startPage = numPages>1 ? 2 : 1;
+    for(let p=startPage;p<=numPages;p++){
+      groups.push({label:'עמוד '+p, pages:[p]});
+    }
+  }
+
+  const srcBytes = new Uint8Array(buf);
+  const srcDoc = await PDFDocument.load(srcBytes);
+
+  const items = [];
+  for(const g of groups){
+    const newDoc = await PDFDocument.create();
+    const copied = await newDoc.copyPages(srcDoc, g.pages.map(p=>p-1));
+    copied.forEach(pg=>newDoc.addPage(pg));
+    const bytes = await newDoc.save();
+    items.push({
+      id: 'q_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
+      source: file.name,
+      label: g.label,
+      pages: g.pages,
+      base64: arrayBufferToBase64(bytes),
+      included: true,
+      subject: subject
+    });
+  }
+
+  let coverItem = null;
+  if(coverPages.length){
+    const coverDoc = await PDFDocument.create();
+    const copiedCover = await coverDoc.copyPages(srcDoc, coverPages.map(p=>p-1));
+    copiedCover.forEach(pg=>coverDoc.addPage(pg));
+    const coverBytes = await coverDoc.save();
+    coverItem = {
+      id: 'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
+      source: file.name,
+      base64: arrayBufferToBase64(coverBytes),
+      subject: subject
+    };
+  }
+
+  return {items, coverItem};
+}
+
+async function handleFiles(fileList){
+  const files = Array.from(fileList).filter(f=>f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  if(!files.length) return;
+  const subject = currentSubjectForUpload();
+  registerSubject(subject);
+  uploadStatus.className='status';
+  for(const file of files){
+    uploadStatus.innerHTML = `<span class="spinner"></span> מעבד את "${file.name}" (מקצוע: ${subject})...`;
+    try{
+      const {items, coverItem} = await parsePdfFile(file, subject);
+      bank.push(...items);
+      if(coverItem) covers.push(coverItem);
+    }catch(e){
+      console.error(e);
+      uploadStatus.className='status err';
+      uploadStatus.textContent = `שגיאה בעיבוד "${file.name}": ${e.message}`;
+    }
+  }
+  uploadStatus.className='status ok';
+  uploadStatus.textContent = `הועלו ועובדו ${files.length} קבצים תחת "${subject}". סה"כ ${bank.length} שאלות בבנק.`;
+  newSubjectInput.value = '';
+  await saveBank();
+  refreshSubjectDropdowns();
+  await renderBank();
+}
+
+async function renderBank(){
+  bankCountEl.textContent = bank.length;
+  if(!bank.length){
+    bankTableWrap.innerHTML = '';
+    bankTableWrap.appendChild(bankEmpty);
+    coverSelect.innerHTML = '<option value="">— ללא עמוד שער —</option>';
+    return;
+  }
+  const filterSubject = filterSubjectSelect.value;
+  const visible = filterSubject ? bank.filter(b=>b.subject===filterSubject) : bank;
+  if(!visible.length){
+    bankTableWrap.innerHTML = `<div class="empty">אין שאלות תחת המקצוע "${filterSubject}".</div>`;
+  } else {
+    let html = `<table><thead><tr>
+      <th></th><th>תצוגה</th><th>שאלה</th><th>מקצוע</th><th>מקור</th><th>עמודים</th>
+    </tr></thead><tbody>`;
+    for(const item of visible){
+      html += `<tr>
+        <td><input type="checkbox" data-id="${item.id}" class="incl-cb" ${item.included?'checked':''}></td>
+        <td><img class="thumb" id="thumb-${item.id}" src="" alt=""></td>
+        <td><b>${item.label}</b></td>
+        <td><span class="tag">${item.subject||'כללי'}</span></td>
+        <td class="muted">${item.source}</td>
+        <td class="muted">${item.pages.length}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+    bankTableWrap.innerHTML = html;
+
+    document.querySelectorAll('.incl-cb').forEach(cb=>{
+      cb.addEventListener('change', async (e)=>{
+        const id = e.target.getAttribute('data-id');
+        const item = bank.find(b=>b.id===id);
+        if(item){ item.included = e.target.checked; await saveBank(); }
+      });
+    });
+
+    for(const item of visible){
+      const img = document.getElementById('thumb-'+item.id);
+      if(img && !img.src){
+        renderThumb(item.base64).then(url=>{ if(url && img) img.src = url; });
+      }
+    }
+  }
+
+  // cover options — filtered by chosen build subject if set
+  const buildSubject = buildSubjectSelect.value;
+  const coverPool = buildSubject ? covers.filter(c=>c.subject===buildSubject) : covers;
+  coverSelect.innerHTML = '<option value="">— ללא עמוד שער —</option>' +
+    coverPool.map(c=>`<option value="${c.id}">${c.source} (${c.subject||'כללי'})</option>`).join('');
+}
+
+// ---- persistence via window.storage ----
+async function saveBank(){
+  try{
+    await window.storage.set('exam-bank-items', JSON.stringify(bank), false);
+    await window.storage.set('exam-bank-covers', JSON.stringify(covers), false);
+    await window.storage.set('exam-bank-subjects', JSON.stringify(subjects), false);
+  }catch(e){ console.warn('שמירה נכשלה', e); }
+}
+async function loadBank(){
+  try{
+    const items = await window.storage.get('exam-bank-items', false);
+    const cvs = await window.storage.get('exam-bank-covers', false);
+    const subs = await window.storage.get('exam-bank-subjects', false);
+    if(items && items.value) bank = JSON.parse(items.value);
+    if(cvs && cvs.value) covers = JSON.parse(cvs.value);
+    if(subs && subs.value) subjects = JSON.parse(subs.value);
+    else subjects = [...new Set(bank.map(b=>b.subject).filter(Boolean))];
+  }catch(e){ /* no saved bank yet */ }
+}
+
+// ---- Google Drive integration ----
+let driveSettings = { clientId: '', apiKey: '' };
+let gsiLoaded = false, gapiLoaded = false, accessToken = null;
+
+async function loadDriveSettings(){
+  try{
+    const r = await window.storage.get('drive-settings', false);
+    if(r && r.value) driveSettings = JSON.parse(r.value);
+  }catch(e){}
+}
+async function saveDriveSettings(){
+  await window.storage.set('drive-settings', JSON.stringify(driveSettings), false);
+}
+
+function loadScriptOnce(src){
+  return new Promise((resolve,reject)=>{
+    if(document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = ()=>reject(new Error('טעינת סקריפט נכשלה: '+src));
+    document.head.appendChild(s);
+  });
+}
+
+const driveModalBackdrop = document.getElementById('driveModalBackdrop');
+document.getElementById('driveSettingsBtn').addEventListener('click', ()=>{
+  document.getElementById('clientIdInput').value = driveSettings.clientId || '';
+  document.getElementById('apiKeyInput').value = driveSettings.apiKey || '';
+  driveModalBackdrop.style.display = 'flex';
+});
+document.getElementById('driveModalCancel').addEventListener('click', ()=>{
+  driveModalBackdrop.style.display = 'none';
+});
+document.getElementById('driveModalSave').addEventListener('click', async ()=>{
+  driveSettings.clientId = document.getElementById('clientIdInput').value.trim();
+  driveSettings.apiKey = document.getElementById('apiKeyInput').value.trim();
+  await saveDriveSettings();
+  driveModalBackdrop.style.display = 'none';
+});
+
+async function ensureGoogleLibs(){
+  if(!gsiLoaded){ await loadScriptOnce('https://accounts.google.com/gsi/client'); gsiLoaded = true; }
+  if(!gapiLoaded){ await loadScriptOnce('https://apis.google.com/js/api.js'); gapiLoaded = true; }
+}
+
+function getAccessToken(){
+  return new Promise((resolve,reject)=>{
+    try{
+      const tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: driveSettings.clientId,
+        scope: 'https://www.googleapis.com/auth/drive.readonly',
+        callback: (resp)=>{
+          if(resp.error) return reject(new Error(resp.error));
+          resolve(resp.access_token);
+        }
+      });
+      tokenClient.requestAccessToken({prompt: accessToken? '' : 'consent'});
+    }catch(e){ reject(e); }
+  });
+}
+
+function openPicker(token){
+  return new Promise((resolve)=>{
+    gapi.load('picker', {callback: ()=>{
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setMimeTypes('application/pdf')
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false);
+      const picker = new google.picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(token)
+        .setDeveloperKey(driveSettings.apiKey)
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .setCallback((data)=>{
+          if(data.action === google.picker.Action.PICKED){
+            resolve(data.docs || []);
+          } else if(data.action === google.picker.Action.CANCEL){
+            resolve([]);
+          }
+        })
+        .build();
+      picker.setVisible(true);
+    }});
+  });
+}
+
+async function fetchDriveFileAsFile(doc, token){
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  if(!res.ok) throw new Error('שגיאה בהורדת "'+doc.name+'" מ-Drive ('+res.status+')');
+  const blob = await res.blob();
+  return new File([blob], doc.name.endsWith('.pdf') ? doc.name : doc.name+'.pdf', {type:'application/pdf'});
+}
+
+document.getElementById('driveImportBtn').addEventListener('click', async ()=>{
+  if(!driveSettings.clientId || !driveSettings.apiKey){
+    uploadStatus.className='status err';
+    uploadStatus.textContent = 'קודם יש להגדיר Client ID ו-API Key דרך "הגדרות Google Drive".';
+    driveModalBackdrop.style.display = 'flex';
+    return;
+  }
+  uploadStatus.className='status';
+  uploadStatus.innerHTML = '<span class="spinner"></span> טוען את ספריות Google...';
+  try{
+    await ensureGoogleLibs();
+    uploadStatus.innerHTML = '<span class="spinner"></span> מבקש הרשאה לגישה ל-Drive...';
+    accessToken = await getAccessToken();
+    uploadStatus.innerHTML = '<span class="spinner"></span> פותח את בורר הקבצים...';
+    const docs = await openPicker(accessToken);
+    if(!docs.length){
+      uploadStatus.className='status'; uploadStatus.textContent = 'לא נבחרו קבצים.';
+      return;
+    }
+    uploadStatus.innerHTML = `<span class="spinner"></span> מוריד ${docs.length} קבצים מ-Drive...`;
+    const files = [];
+    for(const d of docs){
+      files.push(await fetchDriveFileAsFile(d, accessToken));
+    }
+    await handleFiles(files);
+  }catch(e){
+    console.error(e);
+    uploadStatus.className='status err';
+    uploadStatus.textContent = 'שגיאה בייבוא מ-Drive: ' + e.message +
+      ' (ייתכן שהדף הזה לא רץ מכתובת https מאושרת ב-Google Cloud Console — האפשרות הזו עובדת רק כשהאפליקציה מתארחת בכתובת קבועה, למשל ב-GitHub Pages).';
+  }
+});
+
+// ---- UI wiring ----
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', ()=>fileInput.click());
+fileInput.addEventListener('change', (e)=>handleFiles(e.target.files));
+['dragenter','dragover'].forEach(ev=>dropZone.addEventListener(ev,(e)=>{e.preventDefault(); dropZone.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>dropZone.addEventListener(ev,(e)=>{e.preventDefault(); dropZone.classList.remove('drag');}));
+dropZone.addEventListener('drop', (e)=>{ handleFiles(e.dataTransfer.files); });
+
+document.getElementById('selectAllBtn').addEventListener('click', async ()=>{
+  bank.forEach(b=>b.included=true); await saveBank(); await renderBank();
+});
+document.getElementById('clearSelectBtn').addEventListener('click', async ()=>{
+  bank.forEach(b=>b.included=false); await saveBank(); await renderBank();
+});
+document.getElementById('clearBankBtn').addEventListener('click', async ()=>{
+  if(!confirm('למחוק את כל המאגר השמור? פעולה זו לא ניתנת לביטול.')) return;
+  bank = []; covers = []; subjects = [];
+  try{
+    await window.storage.delete('exam-bank-items', false);
+    await window.storage.delete('exam-bank-covers', false);
+    await window.storage.delete('exam-bank-subjects', false);
+  }catch(e){}
+  refreshSubjectDropdowns();
+  await renderBank();
+});
+filterSubjectSelect.addEventListener('change', renderBank);
+buildSubjectSelect.addEventListener('change', renderBank);
+
+document.getElementById('generateBtn').addEventListener('click', async ()=>{
+  const genStatus = document.getElementById('generateStatus');
+  const downloadArea = document.getElementById('downloadArea');
+  downloadArea.innerHTML = '';
+  const n = parseInt(document.getElementById('numQuestions').value, 10);
+  const buildSubject = buildSubjectSelect.value;
+  if(!buildSubject){
+    genStatus.className='status err'; genStatus.textContent='נא לבחור מקצוע לבניית המבחן ממנו.'; return;
+  }
+  const included = bank.filter(b=>b.included && b.subject===buildSubject);
+  if(!n || n<1){ genStatus.className='status err'; genStatus.textContent='נא להזין מספר שאלות תקין.'; return; }
+  if(n > included.length){
+    genStatus.className='status err';
+    genStatus.textContent = `במקצוע "${buildSubject}" יש רק ${included.length} שאלות מסומנות, לא ניתן לבחור ${n}.`;
+    return;
+  }
+  genStatus.className='status'; genStatus.innerHTML = '<span class="spinner"></span> מרכיב מבחן...';
+
+  try{
+    const shuffled = [...included].sort(()=>Math.random()-0.5);
+    const selected = shuffled.slice(0, n);
+
+    const finalDoc = await PDFDocument.create();
+    const coverId = coverSelect.value;
+    if(coverId){
+      const coverItem = covers.find(c=>c.id===coverId);
+      if(coverItem){
+        const coverDoc = await PDFDocument.load(base64ToArrayBuffer(coverItem.base64));
+        const pages = await finalDoc.copyPages(coverDoc, coverDoc.getPageIndices());
+        pages.forEach(p=>finalDoc.addPage(p));
+      }
+    }
+    for(const item of selected){
+      const itemDoc = await PDFDocument.load(base64ToArrayBuffer(item.base64));
+      const pages = await finalDoc.copyPages(itemDoc, itemDoc.getPageIndices());
+      pages.forEach(p=>finalDoc.addPage(p));
+    }
+    const outBytes = await finalDoc.save();
+    const blob = new Blob([outBytes], {type:'application/pdf'});
+    const url = URL.createObjectURL(blob);
+
+    genStatus.className='status ok';
+    genStatus.textContent = `המבחן הורכב בהצלחה מ-${n} שאלות: ${selected.map(s=>s.label).join(', ')}`;
+
+    downloadArea.innerHTML = `
+      <div class="download-box">
+        <p style="margin:0 0 10px;">📄 המבחן מוכן!</p>
+        <a class="btn" href="${url}" download="מבחן_מורכב.pdf">הורדת ה-PDF</a>
+      </div>`;
+  }catch(e){
+    console.error(e);
+    genStatus.className='status err';
+    genStatus.textContent = 'שגיאה בהרכבת המבחן: ' + e.message;
+  }
+});
+
+// init
+(async function init(){
+  await loadBank();
+  await loadDriveSettings();
+  refreshSubjectDropdowns();
+  await renderBank();
+})();
+</script>
+</body>
+</html>
