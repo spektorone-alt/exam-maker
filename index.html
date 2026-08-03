@@ -367,7 +367,7 @@ async function parsePdfFile(file, subject){
       const topCut = h.headingBox.y + h.headingBox.fontSize*1.5;
       let bottomCut = null;
       if(sameNextPage){
-        bottomCut = next.headingBox.y + next.headingBox.fontSize*0.3;
+        bottomCut = next.headingBox.y + next.headingBox.fontSize*1.0;
       } else if(startPage === endPage && pageFooterY[startPage] !== undefined){
         bottomCut = pageFooterY[startPage];
       }
@@ -381,11 +381,13 @@ async function parsePdfFile(file, subject){
         cropSpecs[endPage] = {top:null, bottom: pageFooterY[endPage] !== undefined ? pageFooterY[endPage] : null};
       }
 
-      // adjust stored box coordinates into the NEW (cropped) page's coordinate space
-      // (new page's y=0 corresponds to the original page's "bottom" crop line)
-      const shiftY = cropSpecs[startPage].bottom || 0;
-      const adjHeadingBox = { ...h.headingBox, y: h.headingBox.y - shiftY };
-      const adjNumberBox = h.numberBox ? { ...h.numberBox, y: h.numberBox.y - shiftY } : null;
+      // adjust stored box coordinates into the NEW page's coordinate space.
+      // Pages keep their ORIGINAL full size (so they stay A4/print-ready) — the cropped
+      // slice is drawn flush against the top of the new page, with blank space below it.
+      const fullHeight = pageDims[startPage].height;
+      const topOffset = fullHeight - topCut; // how far the content shifts up
+      const adjHeadingBox = { ...h.headingBox, y: h.headingBox.y + topOffset };
+      const adjNumberBox = h.numberBox ? { ...h.numberBox, y: h.numberBox.y + topOffset } : null;
 
       groups.push({
         label:'שאלה '+h.num,
@@ -416,10 +418,13 @@ async function parsePdfFile(file, subject){
       const spec = g.cropSpecs[pnum] || {};
       const top = (spec.top !== undefined && spec.top !== null) ? Math.min(spec.top, height) : height;
       const bottom = (spec.bottom !== undefined && spec.bottom !== null) ? Math.max(spec.bottom, 0) : 0;
-      if(top > bottom + 10){
+      const sliceHeight = top - bottom;
+      if(sliceHeight > 10){
         const embedded = await newDoc.embedPage(srcPage, {left:0, bottom, right:width, top});
-        const newPage = newDoc.addPage([width, top-bottom]);
-        newPage.drawPage(embedded, {x:0, y:0, width, height: top-bottom});
+        // keep the ORIGINAL full page size (print-ready A4) — draw the cropped slice
+        // flush against the top of the page, leaving blank space below if it's shorter
+        const newPage = newDoc.addPage([width, height]);
+        newPage.drawPage(embedded, {x:0, y: height-sliceHeight, width, height: sliceHeight});
       } else {
         // crop window degenerated (shouldn't normally happen) — fall back to the full page
         const [copied] = await newDoc.copyPages(srcDoc, [pnum-1]);
@@ -796,8 +801,6 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
       }
     }catch(e){ console.warn('Hebrew font embed failed, will fall back to digit-only renumbering', e); }
 
-    function reverseHeb(s){ return s.split('').reverse().join(''); }
-
     const coverId = coverSelect.value;
     if(coverId){
       const coverItem = covers.find(c=>c.id===coverId);
@@ -820,7 +823,6 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
         const pad = 6;
         const newSize = box.fontSize * 1.2;        // slightly bigger
         const newY = box.y - box.fontSize * 0.5;   // sit a bit lower than the original line
-        const label = `${newNum} ${reverseHeb('שאלה')}`; // digits (LTR) + reversed Hebrew word, drawn LTR = correct RTL visual
         firstPage.drawRectangle({
           x: box.xLeft - pad*3,
           y: box.y - box.fontSize*0.9,
@@ -828,13 +830,21 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
           height: box.fontSize*2.2,
           color: PDFLib.rgb(1,1,1)
         });
-        firstPage.drawText(label, {
-          x: box.xLeft,
-          y: newY,
-          size: newSize,
-          font: hebrewFont,
-          color: PDFLib.rgb(0,0,0)
-        });
+        // Draw explicitly, letter by letter, right-to-left — no reliance on string reversal tricks.
+        // Hebrew word "שאלה" (letters in normal reading order: ש,א,ל,ה) is placed starting from the
+        // RIGHT edge of the box, each letter moving further left, guaranteeing ש ends up rightmost.
+        const hebrewLetters = 'שאלה'.split('');
+        let cursorX = box.xRight;
+        for(const ch of hebrewLetters){
+          const w = hebrewFont.widthOfTextAtSize(ch, newSize);
+          cursorX -= w;
+          firstPage.drawText(ch, { x: cursorX, y: newY, size: newSize, font: hebrewFont, color: PDFLib.rgb(0,0,0) });
+        }
+        // number sits to the left of the word, with a small gap, reading normally left-to-right
+        const spaceW = numberFont.widthOfTextAtSize(' ', newSize);
+        const numW = numberFont.widthOfTextAtSize(newNum, newSize);
+        cursorX -= spaceW;
+        firstPage.drawText(newNum, { x: cursorX - numW, y: newY, size: newSize, font: numberFont, color: PDFLib.rgb(0,0,0) });
       } else if(item.numberBox && pages.length){
         const box = item.numberBox;
         const newNum = String(i+1);
