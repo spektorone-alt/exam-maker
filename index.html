@@ -126,21 +126,6 @@
     <div class="status" id="uploadStatus"></div>
   </div>
 
-  <!-- Step 1b: Cover/instructions page upload (separate from question bank) -->
-  <div class="card">
-    <h2><span class="step-num">1</span>ב עמוד שער / הוראות (קובץ נפרד)</h2>
-    <p class="muted" style="margin-top:-6px;">קובץ PDF נפרד שמכיל רק את עמוד השער עם לוגו המכללה וההוראות — לא ייסרק לחיפוש שאלות, ישמש רק כשער למבחן שתרכיבו.</p>
-    <div class="form-row">
-      <label>מקצוע / קורס:</label>
-      <select id="coverSubjectSelect"><option value="">— בחר מקצוע קיים —</option></select>
-    </div>
-    <div class="drop" id="coverDropZone">
-      📄 גררו לכאן קובץ PDF של עמוד השער בלבד, או לחצו לבחירה
-      <input type="file" id="coverFileInput" accept="application/pdf">
-    </div>
-    <div class="status" id="coverUploadStatus"></div>
-  </div>
-
   <!-- Google Drive settings modal -->
   <div id="driveModalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(20,30,60,.45); z-index:50; align-items:center; justify-content:center;">
     <div class="card" style="max-width:460px; width:90%; margin:0;">
@@ -191,7 +176,12 @@
     </div>
     <div class="form-row">
       <label>עמוד שער / הוראות מתוך:</label>
-      <select id="coverSelect"><option value="">— ללא עמוד שער —</option></select>
+      <div class="controls" style="align-items:center;">
+        <select id="coverSelect"><option value="">— ללא עמוד שער —</option></select>
+        <button type="button" class="btn secondary" id="addCoverBtn" style="flex:0 0 auto;">➕ העלה עמוד שער חדש</button>
+        <input type="file" id="coverFileInput" accept="application/pdf" style="display:none;">
+      </div>
+      <div class="status" id="coverUploadStatus"></div>
     </div>
     <div class="form-row">
       <label>כמות שאלות במבחן החדש:</label>
@@ -229,10 +219,9 @@ const subjectSelect = document.getElementById('subjectSelect');
 const newSubjectInput = document.getElementById('newSubjectInput');
 const filterSubjectSelect = document.getElementById('filterSubjectSelect');
 const buildSubjectSelect = document.getElementById('buildSubjectSelect');
-const coverSubjectSelect = document.getElementById('coverSubjectSelect');
-const coverDropZone = document.getElementById('coverDropZone');
 const coverFileInput = document.getElementById('coverFileInput');
 const coverUploadStatus = document.getElementById('coverUploadStatus');
+const addCoverBtn = document.getElementById('addCoverBtn');
 
 function refreshSubjectDropdowns(){
   const opts = subjects.map(s=>`<option value="${s}">${s}</option>`).join('');
@@ -241,9 +230,6 @@ function refreshSubjectDropdowns(){
   const prevBuild = buildSubjectSelect.value;
   buildSubjectSelect.innerHTML = '<option value="">— בחר מקצוע —</option>' + opts;
   if(subjects.includes(prevBuild)) buildSubjectSelect.value = prevBuild;
-  const prevCoverSubj = coverSubjectSelect.value;
-  coverSubjectSelect.innerHTML = '<option value="">— בחר מקצוע קיים —</option>' + opts;
-  if(subjects.includes(prevCoverSubj)) coverSubjectSelect.value = prevCoverSubj;
 }
 
 function currentSubjectForUpload(){
@@ -724,10 +710,10 @@ dropZone.addEventListener('drop', (e)=>{ handleFiles(e.dataTransfer.files); });
 async function handleCoverFile(fileList){
   const file = Array.from(fileList).find(f=>f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
   if(!file) return;
-  const subject = coverSubjectSelect.value;
+  const subject = buildSubjectSelect.value;
   if(!subject){
     coverUploadStatus.className='status err';
-    coverUploadStatus.textContent = 'נא לבחור מקצוע קיים עבור עמוד השער הזה (אם המקצוע עוד לא קיים, קודם העלו אליו לפחות קובץ שאלות אחד למעלה).';
+    coverUploadStatus.textContent = 'נא לבחור קודם "מקצוע לבניית המבחן ממנו" למעלה, ואז להעלות את עמוד השער.';
     return;
   }
   coverUploadStatus.className='status';
@@ -737,19 +723,17 @@ async function handleCoverFile(fileList){
     covers.push(coverItem);
     await saveBank();
     await renderBank();
+    coverSelect.value = coverItem.id;
     coverUploadStatus.className='status ok';
-    coverUploadStatus.textContent = `נוסף עמוד שער "${file.name}" תחת "${subject}".`;
+    coverUploadStatus.textContent = `נוסף עמוד שער "${file.name}" תחת "${subject}" ונבחר אוטומטית.`;
   }catch(e){
     console.error(e);
     coverUploadStatus.className='status err';
     coverUploadStatus.textContent = 'שגיאה בעיבוד עמוד השער: ' + e.message;
   }
 }
-coverDropZone.addEventListener('click', ()=>coverFileInput.click());
+addCoverBtn.addEventListener('click', ()=>coverFileInput.click());
 coverFileInput.addEventListener('change', (e)=>handleCoverFile(e.target.files));
-['dragenter','dragover'].forEach(ev=>coverDropZone.addEventListener(ev,(e)=>{e.preventDefault(); coverDropZone.classList.add('drag');}));
-['dragleave','drop'].forEach(ev=>coverDropZone.addEventListener(ev,(e)=>{e.preventDefault(); coverDropZone.classList.remove('drag');}));
-coverDropZone.addEventListener('drop', (e)=>{ handleCoverFile(e.dataTransfer.files); });
 
 document.getElementById('selectAllBtn').addEventListener('click', async ()=>{
   bank.forEach(b=>b.included=true); await saveBank(); await renderBank();
