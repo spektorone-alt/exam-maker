@@ -114,7 +114,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v8 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v9 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -313,7 +313,7 @@ async function parsePdfFile(file, subject){
     for(const item of content.items){
       if(!item.str || !item.str.trim()) continue;
       const y = Math.round(item.transform[5]);
-      let line = lines.find(l => Math.abs(l.y - y) <= 2);
+      let line = lines.find(l => Math.abs(l.y - y) <= 5);
       if(!line){ line = {y, parts:[]}; lines.push(line); }
       line.parts.push({
         x:item.transform[4], y:item.transform[5], str:item.str,
