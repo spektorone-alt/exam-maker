@@ -114,7 +114,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v9 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v10 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -401,7 +401,7 @@ async function parsePdfFile(file, subject){
 
       // first page: always strip anything above this question's own heading (removes running headers
       // and/or the tail of a previous question sharing the same physical page)
-      const topCut = h.headingBox.y + h.headingBox.fontSize*3.2;
+      const topCut = h.headingBox.y - h.headingBox.fontSize*0.35;
       let bottomCut = null;
       if(sameNextPage){
         bottomCut = next.headingBox.y + next.headingBox.fontSize*1.0;
@@ -446,22 +446,27 @@ async function parsePdfFile(file, subject){
   const srcDoc = await PDFDocument.load(srcBytes);
   const srcPages = srcDoc.getPages();
 
+  const HEADER_GAP = 70; // points reserved at the top of a question's first page for our own fresh heading
+
   const items = [];
   for(const g of groups){
     const newDoc = await PDFDocument.create();
-    for(const pnum of g.pages){
+    for(let idx=0; idx<g.pages.length; idx++){
+      const pnum = g.pages[idx];
       const srcPage = srcPages[pnum-1];
       const {width, height} = srcPage.getSize();
       const spec = g.cropSpecs[pnum] || {};
       const top = (spec.top !== undefined && spec.top !== null) ? Math.min(spec.top, height) : height;
       const bottom = (spec.bottom !== undefined && spec.bottom !== null) ? Math.max(spec.bottom, 0) : 0;
       const sliceHeight = top - bottom;
+      const needsGap = (idx === 0 && g.headingBox); // first page of a real detected question gets a reserved blank strip for our own heading
       if(sliceHeight > 10){
         const embedded = await newDoc.embedPage(srcPage, {left:0, bottom, right:width, top});
+        const gap = needsGap ? Math.max(0, Math.min(HEADER_GAP, height - sliceHeight - 10)) : 0;
         // keep the ORIGINAL full page size (print-ready A4) — draw the cropped slice
-        // flush against the top of the page, leaving blank space below if it's shorter
+        // below the reserved gap (if any), leaving blank space at the very top for our heading
         const newPage = newDoc.addPage([width, height]);
-        newPage.drawPage(embedded, {x:0, y: height-sliceHeight, width, height: sliceHeight});
+        newPage.drawPage(embedded, {x:0, y: height-gap-sliceHeight, width, height: sliceHeight});
       } else {
         // crop window degenerated (shouldn't normally happen) — fall back to the full page
         const [copied] = await newDoc.copyPages(srcDoc, [pnum-1]);
@@ -877,56 +882,33 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
       const pages = await finalDoc.copyPages(itemDoc, itemDoc.getPageIndices());
       pages.forEach(p=>finalDoc.addPage(p));
 
-      if(hebrewFont && item.headingBox && pages.length){
-        const box = item.headingBox;
+      if(item.headingBox && pages.length){
         const newNum = String(i+1);
         const firstPage = pages[0];
-        const pad = 6;
-        const newSize = box.fontSize * 1.2;        // slightly bigger
-        const newY = box.y - box.fontSize * 0.5;   // sit a bit lower than the original line
-        firstPage.drawRectangle({
-          x: box.xLeft - pad*3,
-          y: box.y - box.fontSize*0.9,
-          width: (box.xRight - box.xLeft) + pad*6,
-          height: box.fontSize*2.2,
-          color: PDFLib.rgb(1,1,1)
-        });
-        // Draw explicitly, letter by letter, right-to-left — no reliance on string reversal tricks.
-        // Hebrew word "שאלה" (letters in normal reading order: ש,א,ל,ה) is placed starting from the
-        // RIGHT edge of the box, each letter moving further left, guaranteeing ש ends up rightmost.
-        const hebrewLetters = 'שאלה'.split('');
-        let cursorX = box.xRight;
-        for(const ch of hebrewLetters){
-          const w = hebrewFont.widthOfTextAtSize(ch, newSize);
-          cursorX -= w;
-          firstPage.drawText(ch, { x: cursorX, y: newY, size: newSize, font: hebrewFont, color: PDFLib.rgb(0,0,0) });
+        const {width, height} = firstPage.getSize();
+        const HEADING_SIZE = 18;
+        const headingY = height - 45; // fixed, uniform position in the reserved blank strip
+        const rightMargin = 55;
+
+        if(hebrewFont){
+          // Draw explicitly, letter by letter, right-to-left — no reliance on string reversal tricks.
+          // Hebrew word "שאלה" (letters in normal order ש,א,ל,ה) is placed starting from the right
+          // margin, each letter moving further left, guaranteeing ש ends up rightmost.
+          const hebrewLetters = 'שאלה'.split('');
+          let cursorX = width - rightMargin;
+          for(const ch of hebrewLetters){
+            const w = hebrewFont.widthOfTextAtSize(ch, HEADING_SIZE);
+            cursorX -= w;
+            firstPage.drawText(ch, { x: cursorX, y: headingY, size: HEADING_SIZE, font: hebrewFont, color: PDFLib.rgb(0,0,0) });
+          }
+          const spaceW = numberFont.widthOfTextAtSize(' ', HEADING_SIZE);
+          const numW = numberFont.widthOfTextAtSize(newNum, HEADING_SIZE);
+          cursorX -= spaceW;
+          firstPage.drawText(newNum, { x: cursorX - numW, y: headingY, size: HEADING_SIZE, font: numberFont, color: PDFLib.rgb(0,0,0) });
+        } else {
+          // no Hebrew font available (e.g. offline) — at least show the number clearly
+          firstPage.drawText('#'+newNum, { x: width-rightMargin-40, y: headingY, size: HEADING_SIZE, font: numberFont, color: PDFLib.rgb(0,0,0) });
         }
-        // number sits to the left of the word, with a small gap, reading normally left-to-right
-        const spaceW = numberFont.widthOfTextAtSize(' ', newSize);
-        const numW = numberFont.widthOfTextAtSize(newNum, newSize);
-        cursorX -= spaceW;
-        firstPage.drawText(newNum, { x: cursorX - numW, y: newY, size: newSize, font: numberFont, color: PDFLib.rgb(0,0,0) });
-      } else if(item.numberBox && pages.length){
-        const box = item.numberBox;
-        const newNum = String(i+1);
-        const firstPage = pages[0];
-        const pad = 2;
-        // erase original number with a white rectangle
-        firstPage.drawRectangle({
-          x: box.x - pad,
-          y: box.y - box.fontSize*0.28,
-          width: Math.max(box.width, box.fontSize*0.7*newNum.length) + pad*2,
-          height: box.fontSize*1.15,
-          color: PDFLib.rgb(1,1,1)
-        });
-        // draw the new sequential number in its place
-        firstPage.drawText(newNum, {
-          x: box.x,
-          y: box.y,
-          size: box.fontSize,
-          font: numberFont,
-          color: PDFLib.rgb(0,0,0)
-        });
       }
     }
     const outBytes = await finalDoc.save();
@@ -934,9 +916,9 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     const url = URL.createObjectURL(blob);
 
     genStatus.className='status ok';
-    const missingBoxCount = selected.filter(s=>!s.headingBox && !s.numberBox).length;
+    const missingBoxCount = selected.filter(s=>!s.headingBox).length;
     genStatus.innerHTML = `המבחן הורכב בהצלחה מ-${n} שאלות, ממוספרות מחדש 1–${n}: ${selected.map(s=>s.label).join(', ')}` +
-      (missingBoxCount ? `<br>⚠️ ב-${missingBoxCount} מהשאלות לא זוהה מיקום כותרת מדויק, ולכן המספור המקורי שלהן נשאר כפי שהיה.` : '') +
+      (missingBoxCount ? `<br>⚠️ ב-${missingBoxCount} מהשאלות לא זוהתה כותרת "שאלה N" בבירור, ולכן הן הופיעו כמו שהיו במקור (בלי מספור חדש ובלי הסרת כותרות).` : '') +
       (!hebrewFont ? `<br>ℹ️ לא הצלחתי לטעון גופן עברי (יתכן שאין חיבור אינטרנט כרגע) — הוחלף רק המספר עצמו, לא כל הכותרת.` : '');
 
     downloadArea.innerHTML = `
