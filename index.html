@@ -94,6 +94,18 @@
   .footer-note{font-size:12px; color:var(--muted); text-align:center; padding:10px;}
   #bankTableWrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
   #bankTableWrap table{ min-width:480px; }
+  .bank-group{
+    border:1px solid var(--border); border-radius:10px; margin-bottom:10px; overflow:hidden;
+  }
+  .bank-group summary{
+    cursor:pointer; padding:12px 14px; background:#f7f8fb; font-size:14px;
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap; list-style:none;
+  }
+  .bank-group summary::-webkit-details-marker{ display:none; }
+  .bank-group summary::before{ content:'▶'; font-size:11px; color:var(--muted); transition:.15s; }
+  .bank-group[open] summary::before{ transform:rotate(90deg); }
+  .bank-group table{ margin:0; }
+  .bank-group th, .bank-group td{ padding:8px 12px; }
   input[type=checkbox]{width:17px; height:17px; cursor:pointer;}
 </style>
 </head>
@@ -284,8 +296,8 @@ async function parsePdfFile(file, subject){
   const headings = [];             // flat list, in document order, may repeat pageNum
   const pageFooterY = {};          // pageNum -> y cutoff (below which = footer, to be stripped) or undefined
   const pageDims = {};             // pageNum -> {width, height}
-  const HEADING_RE_1 = /^שאלה\s*[:.]?\s*(\d+)\s*$/;   // "שאלה 1"
-  const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה\s*$/;   // "1 שאלה"
+  const HEADING_RE_1 = /^שאלה\s*[:.]?\s*(\d+)/;   // "שאלה 1" (start-anchored only — line may continue with body text if merged)
+  const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה\b/; // "1 שאלה"
   const FOOTER_RE = /עמוד\s*\d+|מתוך\s*\d+|^\d+\s*\/\s*\d+$/;
 
   for(let p=1;p<=numPages;p++){
@@ -317,12 +329,23 @@ async function parsePdfFile(file, subject){
       const m = lineText.match(HEADING_RE_1) || lineText.match(HEADING_RE_2);
       if(!m) continue;
 
-      const xLeft = Math.min(...line.parts.map(pt=>pt.x));
-      const xRight = Math.max(...line.parts.map(pt=>pt.x + (pt.width || pt.fontSize*0.55*pt.str.length)));
+      const digitPart = line.parts.find(pt => /^\d+$/.test(pt.str.trim()));
+      const wordPart = line.parts.find(pt => pt.str.includes('שאלה'));
+
+      let xLeft, xRight;
+      if(digitPart && wordPart){
+        const digitRight = digitPart.x + (digitPart.width || digitPart.fontSize*0.6*digitPart.str.trim().length);
+        const wordRight = wordPart.x + (wordPart.width || wordPart.fontSize*0.55*wordPart.str.length);
+        xLeft = Math.min(digitPart.x, wordPart.x);
+        xRight = Math.max(digitRight, wordRight);
+      } else {
+        // fallback: best effort using the whole line
+        xLeft = Math.min(...line.parts.map(pt=>pt.x));
+        xRight = Math.max(...line.parts.map(pt=>pt.x + (pt.width || pt.fontSize*0.55*pt.str.length)));
+      }
       const avgFontSize = line.parts.reduce((s,pt)=>s+pt.fontSize,0) / line.parts.length;
       const headingBox = { xLeft, xRight, y: line.y, fontSize: avgFontSize };
 
-      const digitPart = line.parts.find(pt => /^\d+$/.test(pt.str.trim()));
       let numberBox = null;
       if(digitPart){
         numberBox = { x: digitPart.x, y: digitPart.y, width: digitPart.width || (digitPart.fontSize*0.6*digitPart.str.trim().length), fontSize: digitPart.fontSize };
@@ -526,20 +549,34 @@ async function renderBank(){
   if(!visible.length){
     bankTableWrap.innerHTML = `<div class="empty">אין שאלות תחת המקצוע "${filterSubject}".</div>`;
   } else {
-    let html = `<table><thead><tr>
-      <th></th><th>תצוגה</th><th>שאלה</th><th>מקצוע</th><th>מקור</th><th>עמודים</th>
-    </tr></thead><tbody>`;
+    // group by source file (and subject, in case the same filename appears under two subjects)
+    const groups = {};
     for(const item of visible){
-      html += `<tr>
-        <td><input type="checkbox" data-id="${item.id}" class="incl-cb" ${item.included?'checked':''}></td>
-        <td><img class="thumb" id="thumb-${item.id}" src="" alt=""></td>
-        <td><b>${item.label}</b></td>
-        <td><span class="tag">${item.subject||'כללי'}</span></td>
-        <td class="muted">${item.source}</td>
-        <td class="muted">${item.pages.length}</td>
-      </tr>`;
+      const key = item.subject + ' || ' + item.source;
+      if(!groups[key]) groups[key] = {source:item.source, subject:item.subject, items:[]};
+      groups[key].items.push(item);
     }
-    html += `</tbody></table>`;
+    let html = '';
+    for(const key of Object.keys(groups)){
+      const g = groups[key];
+      const includedCount = g.items.filter(i=>i.included).length;
+      html += `<details class="bank-group">
+        <summary>📄 <b>${g.source}</b> <span class="tag">${g.subject||'כללי'}</span>
+          <span class="muted">— ${g.items.length} שאלות (${includedCount} מסומנות)</span>
+        </summary>
+        <table><thead><tr>
+          <th></th><th>תצוגה</th><th>שאלה</th><th>עמודים</th>
+        </tr></thead><tbody>`;
+      for(const item of g.items){
+        html += `<tr>
+          <td><input type="checkbox" data-id="${item.id}" class="incl-cb" ${item.included?'checked':''}></td>
+          <td><img class="thumb" id="thumb-${item.id}" src="" alt=""></td>
+          <td><b>${item.label}</b></td>
+          <td class="muted">${item.pages.length}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></details>`;
+    }
     bankTableWrap.innerHTML = html;
 
     document.querySelectorAll('.incl-cb').forEach(cb=>{
@@ -550,12 +587,19 @@ async function renderBank(){
       });
     });
 
-    for(const item of visible){
-      const img = document.getElementById('thumb-'+item.id);
-      if(img && !img.src){
-        renderThumb(item.base64).then(url=>{ if(url && img) img.src = url; });
-      }
-    }
+    // only render thumbnails once a group is actually opened (keeps things fast/compact by default)
+    document.querySelectorAll('.bank-group').forEach(det=>{
+      det.addEventListener('toggle', function loadThumbs(){
+        if(!det.open) return;
+        det.querySelectorAll('img.thumb').forEach(img=>{
+          if(!img.src){
+            const id = img.id.replace('thumb-','');
+            const item = bank.find(b=>b.id===id);
+            if(item) renderThumb(item.base64).then(url=>{ if(url) img.src = url; });
+          }
+        });
+      });
+    });
   }
 
   // cover options — filtered by chosen build subject if set
