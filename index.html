@@ -11,9 +11,19 @@
     --card:#ffffff; --border:#e2e6ef; --muted:#6b7280; --danger:#d64545; --good:#1f9d55;
   }
   *{box-sizing:border-box;}
+  *{box-sizing:border-box; min-width:0;}
+  html, body{ overflow-x:hidden; max-width:100%; }
   body{
     margin:0; font-family:"Segoe UI","Arial",Tahoma,sans-serif; background:var(--bg); color:#1c2333;
     direction:rtl;
+  }
+  img, input, select, button{ max-width:100%; }
+  .form-row{ display:flex; flex-direction:column; gap:6px; margin-bottom:16px; }
+  .form-row label{ font-size:13px; color:var(--muted); font-weight:600; }
+  .form-row .controls{ display:flex; flex-wrap:wrap; gap:8px; }
+  .form-row .controls > *{ flex:1 1 160px; min-width:0; }
+  .form-row select, .form-row input[type=text], .form-row input[type=number]{
+    width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; font-size:14px;
   }
   header{
     background:linear-gradient(135deg,var(--navy),var(--navy-dark)); color:#fff;
@@ -77,6 +87,8 @@
     background:#eefaf1; border:1px solid #c6ebd2; border-radius:10px; padding:16px; text-align:center;
   }
   .footer-note{font-size:12px; color:var(--muted); text-align:center; padding:10px;}
+  #bankTableWrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  #bankTableWrap table{ min-width:480px; }
   input[type=checkbox]{width:17px; height:17px; cursor:pointer;}
 </style>
 </head>
@@ -95,15 +107,13 @@
       <h2><span class="step-num">1</span> העלאת מאגר מבחנים (PDF)</h2>
       <button class="btn secondary" id="driveSettingsBtn" style="font-size:12px;">⚙️ הגדרות Google Drive</button>
     </div>
-    <table style="margin-bottom:12px;">
-      <tr>
-        <td style="width:130px;">מקצוע / קורס:</td>
-        <td style="display:flex; gap:8px;">
-          <select id="subjectSelect" style="flex:1;"><option value="">— בחר מקצוע קיים —</option></select>
-          <input type="text" id="newSubjectInput" placeholder="או הקלד מקצוע חדש..." style="flex:1; padding:8px; border:1px solid var(--border); border-radius:6px;">
-        </td>
-      </tr>
-    </table>
+    <div class="form-row">
+      <label>מקצוע / קורס:</label>
+      <div class="controls">
+        <select id="subjectSelect"><option value="">— בחר מקצוע קיים —</option></select>
+        <input type="text" id="newSubjectInput" placeholder="או הקלד מקצוע חדש...">
+      </div>
+    </div>
     <div class="drop" id="dropZone">
       📄 גררו לכאן קבצי PDF, או לחצו לבחירה (אפשר לבחור כמה קבצים יחד)
       <input type="file" id="fileInput" accept="application/pdf" multiple>
@@ -124,10 +134,14 @@
         2. צרו <b>OAuth 2.0 Client ID</b> מסוג "Web application", והוסיפו כ-Authorized JavaScript origin את הכתובת שבה מתארחת האפליקציה הזו (למשל דף ב-GitHub Pages שלכם).<br>
         3. צרו גם <b>API Key</b> (Credentials → Create → API key), והגבילו אותו ל-Picker API.
       </p>
-      <table>
-        <tr><td style="width:110px;">Client ID</td><td><input type="text" id="clientIdInput" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;" placeholder="xxxxx.apps.googleusercontent.com"></td></tr>
-        <tr><td>API Key</td><td><input type="text" id="apiKeyInput" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:6px;" placeholder="AIza..."></td></tr>
-      </table>
+      <div class="form-row">
+        <label>Client ID</label>
+        <input type="text" id="clientIdInput" placeholder="xxxxx.apps.googleusercontent.com">
+      </div>
+      <div class="form-row">
+        <label>API Key</label>
+        <input type="text" id="apiKeyInput" placeholder="AIza...">
+      </div>
       <div style="text-align:left; margin-top:14px; display:flex; gap:8px; justify-content:flex-end;">
         <button class="btn secondary" id="driveModalCancel">ביטול</button>
         <button class="btn" id="driveModalSave">שמירה</button>
@@ -154,20 +168,18 @@
   <!-- Step 3: Build exam -->
   <div class="card">
     <h2><span class="step-num">3</span> הרכבת מבחן חדש</h2>
-    <table style="margin-bottom:14px;">
-      <tr>
-        <td style="width:220px;">מקצוע לבניית המבחן ממנו:</td>
-        <td><select id="buildSubjectSelect"><option value="">— בחר מקצוע —</option></select></td>
-      </tr>
-      <tr>
-        <td style="width:220px;">עמוד שער / הוראות מתוך:</td>
-        <td><select id="coverSelect"><option value="">— ללא עמוד שער —</option></select></td>
-      </tr>
-      <tr>
-        <td>כמות שאלות במבחן החדש:</td>
-        <td><input type="number" id="numQuestions" class="num-input" min="1" value="5"></td>
-      </tr>
-    </table>
+    <div class="form-row">
+      <label>מקצוע לבניית המבחן ממנו:</label>
+      <select id="buildSubjectSelect"><option value="">— בחר מקצוע —</option></select>
+    </div>
+    <div class="form-row">
+      <label>עמוד שער / הוראות מתוך:</label>
+      <select id="coverSelect"><option value="">— ללא עמוד שער —</option></select>
+    </div>
+    <div class="form-row">
+      <label>כמות שאלות במבחן החדש:</label>
+      <input type="number" id="numQuestions" class="num-input" min="1" value="5" style="width:120px;">
+    </div>
     <button class="btn" id="generateBtn">🎲 הרכב מבחן אקראי</button>
     <div class="status" id="generateStatus"></div>
     <div id="downloadArea" style="margin-top:16px;"></div>
@@ -255,13 +267,34 @@ async function parsePdfFile(file, subject){
   const pdfjsDoc = await pdfjsLib.getDocument({data: buf.slice(0)}).promise;
   const numPages = pdfjsDoc.numPages;
   const headings = [];
+  const HEADING_RE_1 = /^שאלה\s*[:.]?\s*(\d+)\s*$/;   // "שאלה 1"
+  const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה\s*$/;   // "1 שאלה"
+
   for(let p=1;p<=numPages;p++){
     const page = await pdfjsDoc.getPage(p);
     const content = await page.getTextContent();
-    const text = content.items.map(i=>i.str).join(' ');
-    const m = text.match(/שאלה\s*(\d+)/) || text.match(/(\d+)\s*שאלה/);
-    if(m) headings.push({pageNum:p, num:m[1]});
+
+    // group text items into visual lines by their y-position (transform[5])
+    const lines = [];
+    for(const item of content.items){
+      if(!item.str || !item.str.trim()) continue;
+      const y = Math.round(item.transform[5]);
+      let line = lines.find(l => Math.abs(l.y - y) <= 2);
+      if(!line){ line = {y, parts:[]}; lines.push(line); }
+      line.parts.push({x:item.transform[4], str:item.str});
+    }
+
+    let matchedNum = null;
+    for(const line of lines){
+      line.parts.sort((a,b)=>a.x-b.x);
+      const lineText = line.parts.map(pt=>pt.str).join(' ').replace(/\s+/g,' ').trim();
+      if(!lineText) continue;
+      const m = lineText.match(HEADING_RE_1) || lineText.match(HEADING_RE_2);
+      if(m){ matchedNum = m[1]; break; }
+    }
+    if(matchedNum !== null) headings.push({pageNum:p, num:matchedNum});
   }
+
   let groups = [];
   let coverPages = [];
   if(headings.length){
@@ -322,12 +355,14 @@ async function handleFiles(fileList){
   const subject = currentSubjectForUpload();
   registerSubject(subject);
   uploadStatus.className='status';
+  const summaries = [];
   for(const file of files){
     uploadStatus.innerHTML = `<span class="spinner"></span> מעבד את "${file.name}" (מקצוע: ${subject})...`;
     try{
       const {items, coverItem} = await parsePdfFile(file, subject);
       bank.push(...items);
       if(coverItem) covers.push(coverItem);
+      summaries.push(`"${file.name}": ${coverItem ? 'זוהה עמוד שער ✓' : 'ללא עמוד שער'}, ${items.length} שאלות זוהו`);
     }catch(e){
       console.error(e);
       uploadStatus.className='status err';
@@ -335,7 +370,8 @@ async function handleFiles(fileList){
     }
   }
   uploadStatus.className='status ok';
-  uploadStatus.textContent = `הועלו ועובדו ${files.length} קבצים תחת "${subject}". סה"כ ${bank.length} שאלות בבנק.`;
+  uploadStatus.innerHTML = `הועלו ועובדו ${files.length} קבצים תחת "${subject}". סה"כ ${bank.length} שאלות בבנק.<br>` +
+    summaries.map(s=>`• ${s}`).join('<br>');
   newSubjectInput.value = '';
   await saveBank();
   refreshSubjectDropdowns();
