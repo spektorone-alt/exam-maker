@@ -2,6 +2,9 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>מרכיב מבחנים אוטומטי</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
@@ -364,7 +367,7 @@ async function parsePdfFile(file, subject){
 
       // first page: always strip anything above this question's own heading (removes running headers
       // and/or the tail of a previous question sharing the same physical page)
-      const topCut = h.headingBox.y + h.headingBox.fontSize*1.5;
+      const topCut = h.headingBox.y + h.headingBox.fontSize*3.2;
       let bottomCut = null;
       if(sameNextPage){
         bottomCut = next.headingBox.y + next.headingBox.fontSize*1.0;
@@ -488,6 +491,9 @@ async function handleFiles(fileList){
   for(const file of files){
     uploadStatus.innerHTML = `<span class="spinner"></span> מעבד את "${file.name}" (מקצוע: ${subject})...`;
     try{
+      // remove any previous entries from this exact filename first, so re-uploading replaces stale data
+      bank = bank.filter(b => !(b.source === file.name && b.subject === subject));
+      covers = covers.filter(c => !(c.source === file.name && c.subject === subject));
       const {items, coverItem} = await parsePdfFile(file, subject);
       bank.push(...items);
       if(coverItem) covers.push(coverItem);
