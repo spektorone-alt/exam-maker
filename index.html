@@ -126,6 +126,21 @@
     <div class="status" id="uploadStatus"></div>
   </div>
 
+  <!-- Step 1b: Cover/instructions page upload (separate from question bank) -->
+  <div class="card">
+    <h2><span class="step-num">1</span>ב עמוד שער / הוראות (קובץ נפרד)</h2>
+    <p class="muted" style="margin-top:-6px;">קובץ PDF נפרד שמכיל רק את עמוד השער עם לוגו המכללה וההוראות — לא ייסרק לחיפוש שאלות, ישמש רק כשער למבחן שתרכיבו.</p>
+    <div class="form-row">
+      <label>מקצוע / קורס:</label>
+      <select id="coverSubjectSelect"><option value="">— בחר מקצוע קיים —</option></select>
+    </div>
+    <div class="drop" id="coverDropZone">
+      📄 גררו לכאן קובץ PDF של עמוד השער בלבד, או לחצו לבחירה
+      <input type="file" id="coverFileInput" accept="application/pdf">
+    </div>
+    <div class="status" id="coverUploadStatus"></div>
+  </div>
+
   <!-- Google Drive settings modal -->
   <div id="driveModalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(20,30,60,.45); z-index:50; align-items:center; justify-content:center;">
     <div class="card" style="max-width:460px; width:90%; margin:0;">
@@ -189,7 +204,9 @@
 
   <div class="footer-note">
     שימו לב: כל שאלה נשמרת ומועתקת כעמוד PDF מקורי (לא כתמונה) — כך שרטוטי המעגלים, הנוסחאות והפורמט נשמרים במדויק.
-    מספרי השאלות ("שאלה 1", "שאלה 2"...) ממוספרים מחדש ברצף לפי סדר הופעתם במבחן החדש. טבלת הניקוד הכוללת בעמוד השער אינה מתעדכנת אוטומטית לפי הבחירה החדשה.
+    אם שתי שאלות שיתפו עמוד מקור אחד, המערכת מפצלת אותן אוטומטית לשני עמודים נפרדים, ומסירה כותרות עליונות חוזרות ("שאלון ..., מועד...") ומספרי עמוד תחתונים ("עמוד X מתוך Y").
+    מספרי השאלות ("שאלה 1", "שאלה 2"...) ממוספרים מחדש ברצף לפי סדר הופעתם במבחן החדש.
+    עמוד השער אפשר להעלות בנפרד למעלה (סעיף 1ב), או להסתמך על הזיהוי האוטומטי מתוך קובץ השאלות עצמו.
     הבנק נשמר אוטומטית בדפדפן שלכם (אישי, לא משותף) כך שבפעם הבאה שתפתחו את האפליקציה הוא עדיין יהיה כאן.
   </div>
 
@@ -212,6 +229,10 @@ const subjectSelect = document.getElementById('subjectSelect');
 const newSubjectInput = document.getElementById('newSubjectInput');
 const filterSubjectSelect = document.getElementById('filterSubjectSelect');
 const buildSubjectSelect = document.getElementById('buildSubjectSelect');
+const coverSubjectSelect = document.getElementById('coverSubjectSelect');
+const coverDropZone = document.getElementById('coverDropZone');
+const coverFileInput = document.getElementById('coverFileInput');
+const coverUploadStatus = document.getElementById('coverUploadStatus');
 
 function refreshSubjectDropdowns(){
   const opts = subjects.map(s=>`<option value="${s}">${s}</option>`).join('');
@@ -220,6 +241,9 @@ function refreshSubjectDropdowns(){
   const prevBuild = buildSubjectSelect.value;
   buildSubjectSelect.innerHTML = '<option value="">— בחר מקצוע —</option>' + opts;
   if(subjects.includes(prevBuild)) buildSubjectSelect.value = prevBuild;
+  const prevCoverSubj = coverSubjectSelect.value;
+  coverSubjectSelect.innerHTML = '<option value="">— בחר מקצוע קיים —</option>' + opts;
+  if(subjects.includes(prevCoverSubj)) coverSubjectSelect.value = prevCoverSubj;
 }
 
 function currentSubjectForUpload(){
@@ -268,13 +292,18 @@ async function parsePdfFile(file, subject){
   const buf = await file.arrayBuffer();
   const pdfjsDoc = await pdfjsLib.getDocument({data: buf.slice(0)}).promise;
   const numPages = pdfjsDoc.numPages;
-  const headings = [];
+  const headings = [];             // flat list, in document order, may repeat pageNum
+  const pageFooterY = {};          // pageNum -> y cutoff (below which = footer, to be stripped) or undefined
+  const pageDims = {};             // pageNum -> {width, height}
   const HEADING_RE_1 = /^שאלה\s*[:.]?\s*(\d+)\s*$/;   // "שאלה 1"
   const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה\s*$/;   // "1 שאלה"
+  const FOOTER_RE = /עמוד\s*\d+|מתוך\s*\d+|^\d+\s*\/\s*\d+$/;
 
   for(let p=1;p<=numPages;p++){
     const page = await pdfjsDoc.getPage(p);
     const content = await page.getTextContent();
+    const viewport = page.getViewport({scale:1});
+    pageDims[p] = {width: viewport.width, height: viewport.height};
 
     // group text items into visual lines by their y-position (transform[5])
     const lines = [];
@@ -289,79 +318,128 @@ async function parsePdfFile(file, subject){
         fontSize: Math.hypot(item.transform[2], item.transform[3]) || 10
       });
     }
+    lines.forEach(l => l.parts.sort((a,b)=>a.x-b.x));
+    lines.sort((a,b)=>b.y-a.y); // top of page first
 
-    let matchedNum = null;
-    let numberBox = null;
-    let headingBox = null;
+    // detect ALL heading lines on this page (a page can legitimately contain 2+ questions)
     for(const line of lines){
-      line.parts.sort((a,b)=>a.x-b.x);
       const lineText = line.parts.map(pt=>pt.str).join(' ').replace(/\s+/g,' ').trim();
       if(!lineText) continue;
       const m = lineText.match(HEADING_RE_1) || lineText.match(HEADING_RE_2);
-      if(m){
-        matchedNum = m[1];
+      if(!m) continue;
 
-        // whole-line bounding box (word + number together) — used to redraw the full "שאלה N" label
-        const xLeft = Math.min(...line.parts.map(pt=>pt.x));
-        const xRight = Math.max(...line.parts.map(pt=>pt.x + (pt.width || pt.fontSize*0.55*pt.str.length)));
-        const avgFontSize = line.parts.reduce((s,pt)=>s+pt.fontSize,0) / line.parts.length;
-        const yTop = line.parts[0].y;
-        headingBox = { xLeft, xRight, y: yTop, fontSize: avgFontSize };
+      const xLeft = Math.min(...line.parts.map(pt=>pt.x));
+      const xRight = Math.max(...line.parts.map(pt=>pt.x + (pt.width || pt.fontSize*0.55*pt.str.length)));
+      const avgFontSize = line.parts.reduce((s,pt)=>s+pt.fontSize,0) / line.parts.length;
+      const headingBox = { xLeft, xRight, y: line.y, fontSize: avgFontSize };
 
-        // find the specific part that is purely digits (the number token) — used as a lighter-weight fallback
-        const digitPart = line.parts.find(pt => /^\d+$/.test(pt.str.trim()));
-        if(digitPart){
-          numberBox = {
-            x: digitPart.x, y: digitPart.y,
-            width: digitPart.width || (digitPart.fontSize*0.6*digitPart.str.trim().length),
-            fontSize: digitPart.fontSize
-          };
-        } else {
-          // digits are embedded together with the word in one text run — estimate position proportionally
-          const part = line.parts.find(pt => /\d/.test(pt.str));
-          if(part){
-            const full = part.str;
-            const idx = full.search(/\d+/);
-            const digits = full.match(/\d+/)[0];
-            const charW = (part.width || (part.fontSize*0.55*full.length)) / full.length;
-            numberBox = {
-              x: part.x + charW*idx, y: part.y,
-              width: charW*digits.length,
-              fontSize: part.fontSize
-            };
-          }
+      const digitPart = line.parts.find(pt => /^\d+$/.test(pt.str.trim()));
+      let numberBox = null;
+      if(digitPart){
+        numberBox = { x: digitPart.x, y: digitPart.y, width: digitPart.width || (digitPart.fontSize*0.6*digitPart.str.trim().length), fontSize: digitPart.fontSize };
+      } else {
+        const part = line.parts.find(pt => /\d/.test(pt.str));
+        if(part){
+          const full = part.str;
+          const idx = full.search(/\d+/);
+          const digits = full.match(/\d+/)[0];
+          const charW = (part.width || (part.fontSize*0.55*full.length)) / full.length;
+          numberBox = { x: part.x + charW*idx, y: part.y, width: charW*digits.length, fontSize: part.fontSize };
         }
-        break;
+      }
+      headings.push({pageNum:p, num:m[1], headingBox, numberBox});
+    }
+
+    // detect a page-number style footer independently (works even without a heading on the page)
+    if(lines.length){
+      const bottomLine = lines[lines.length-1]; // lines sorted top-first, so last = bottommost
+      const txt = bottomLine.parts.map(pt=>pt.str).join(' ').trim();
+      if(FOOTER_RE.test(txt) && bottomLine.y < pageDims[p].height*0.15){
+        const fs = bottomLine.parts[0]?.fontSize || 10;
+        pageFooterY[p] = bottomLine.y + fs*1.3;
       }
     }
-    if(matchedNum !== null) headings.push({pageNum:p, num:matchedNum, numberBox, headingBox});
   }
 
   let groups = [];
   let coverPages = [];
+
   if(headings.length){
     coverPages = rangeArr(1, headings[0].pageNum-1);
+
     for(let i=0;i<headings.length;i++){
-      const start = headings[i].pageNum;
-      const end = (i+1<headings.length) ? headings[i+1].pageNum-1 : numPages;
-      groups.push({label:'שאלה '+headings[i].num, pages: rangeArr(start,end), numberBox: headings[i].numberBox, headingBox: headings[i].headingBox});
+      const h = headings[i];
+      const next = headings[i+1];
+      const sameNextPage = next && next.pageNum === h.pageNum;
+      const startPage = h.pageNum;
+      const endPage = next ? (sameNextPage ? h.pageNum : next.pageNum-1) : numPages;
+
+      const cropSpecs = {}; // pageNum -> {top, bottom} in ORIGINAL page coordinates (null = full edge)
+
+      // first page: always strip anything above this question's own heading (removes running headers
+      // and/or the tail of a previous question sharing the same physical page)
+      const topCut = h.headingBox.y + h.headingBox.fontSize*1.5;
+      let bottomCut = null;
+      if(sameNextPage){
+        bottomCut = next.headingBox.y + next.headingBox.fontSize*0.3;
+      } else if(startPage === endPage && pageFooterY[startPage] !== undefined){
+        bottomCut = pageFooterY[startPage];
+      }
+      cropSpecs[startPage] = {top: topCut, bottom: bottomCut};
+
+      if(endPage !== startPage){
+        // middle pages: keep full width, only strip a detected footer independently
+        for(let pnum=startPage+1; pnum<endPage; pnum++){
+          cropSpecs[pnum] = {top:null, bottom: pageFooterY[pnum] !== undefined ? pageFooterY[pnum] : null};
+        }
+        cropSpecs[endPage] = {top:null, bottom: pageFooterY[endPage] !== undefined ? pageFooterY[endPage] : null};
+      }
+
+      // adjust stored box coordinates into the NEW (cropped) page's coordinate space
+      // (new page's y=0 corresponds to the original page's "bottom" crop line)
+      const shiftY = cropSpecs[startPage].bottom || 0;
+      const adjHeadingBox = { ...h.headingBox, y: h.headingBox.y - shiftY };
+      const adjNumberBox = h.numberBox ? { ...h.numberBox, y: h.numberBox.y - shiftY } : null;
+
+      groups.push({
+        label:'שאלה '+h.num,
+        pages: rangeArr(startPage, endPage),
+        cropSpecs,
+        numberBox: adjNumberBox,
+        headingBox: adjHeadingBox
+      });
     }
   } else {
     coverPages = numPages>1 ? [1] : [];
     const startPage = numPages>1 ? 2 : 1;
     for(let p=startPage;p<=numPages;p++){
-      groups.push({label:'עמוד '+p, pages:[p], numberBox:null, headingBox:null});
+      groups.push({label:'עמוד '+p, pages:[p], cropSpecs:{}, numberBox:null, headingBox:null});
     }
   }
 
   const srcBytes = new Uint8Array(buf);
   const srcDoc = await PDFDocument.load(srcBytes);
+  const srcPages = srcDoc.getPages();
 
   const items = [];
   for(const g of groups){
     const newDoc = await PDFDocument.create();
-    const copied = await newDoc.copyPages(srcDoc, g.pages.map(p=>p-1));
-    copied.forEach(pg=>newDoc.addPage(pg));
+    for(const pnum of g.pages){
+      const srcPage = srcPages[pnum-1];
+      const {width, height} = srcPage.getSize();
+      const spec = g.cropSpecs[pnum] || {};
+      const top = (spec.top !== undefined && spec.top !== null) ? Math.min(spec.top, height) : height;
+      const bottom = (spec.bottom !== undefined && spec.bottom !== null) ? Math.max(spec.bottom, 0) : 0;
+      if(top > bottom + 10){
+        const embedded = await newDoc.embedPage(srcPage, {left:0, bottom, right:width, top});
+        const newPage = newDoc.addPage([width, top-bottom]);
+        newPage.drawPage(embedded, {x:0, y:0, width, height: top-bottom});
+      } else {
+        // crop window degenerated (shouldn't normally happen) — fall back to the full page
+        const [copied] = await newDoc.copyPages(srcDoc, [pnum-1]);
+        newDoc.addPage(copied);
+      }
+    }
     const bytes = await newDoc.save();
     items.push({
       id: 'q_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
@@ -391,6 +469,19 @@ async function parsePdfFile(file, subject){
   }
 
   return {items, coverItem};
+}
+
+// Parse a PDF meant purely as a cover/instructions template — used as-is, no question extraction.
+async function parseCoverOnlyFile(file, subject){
+  const buf = await file.arrayBuffer();
+  const srcDoc = await PDFDocument.load(new Uint8Array(buf));
+  const bytes = await srcDoc.save();
+  return {
+    id: 'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
+    source: file.name,
+    base64: arrayBufferToBase64(bytes),
+    subject: subject
+  };
 }
 
 async function handleFiles(fileList){
@@ -629,6 +720,36 @@ fileInput.addEventListener('change', (e)=>handleFiles(e.target.files));
 ['dragenter','dragover'].forEach(ev=>dropZone.addEventListener(ev,(e)=>{e.preventDefault(); dropZone.classList.add('drag');}));
 ['dragleave','drop'].forEach(ev=>dropZone.addEventListener(ev,(e)=>{e.preventDefault(); dropZone.classList.remove('drag');}));
 dropZone.addEventListener('drop', (e)=>{ handleFiles(e.dataTransfer.files); });
+
+async function handleCoverFile(fileList){
+  const file = Array.from(fileList).find(f=>f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  if(!file) return;
+  const subject = coverSubjectSelect.value;
+  if(!subject){
+    coverUploadStatus.className='status err';
+    coverUploadStatus.textContent = 'נא לבחור מקצוע קיים עבור עמוד השער הזה (אם המקצוע עוד לא קיים, קודם העלו אליו לפחות קובץ שאלות אחד למעלה).';
+    return;
+  }
+  coverUploadStatus.className='status';
+  coverUploadStatus.innerHTML = `<span class="spinner"></span> מעבד את "${file.name}"...`;
+  try{
+    const coverItem = await parseCoverOnlyFile(file, subject);
+    covers.push(coverItem);
+    await saveBank();
+    await renderBank();
+    coverUploadStatus.className='status ok';
+    coverUploadStatus.textContent = `נוסף עמוד שער "${file.name}" תחת "${subject}".`;
+  }catch(e){
+    console.error(e);
+    coverUploadStatus.className='status err';
+    coverUploadStatus.textContent = 'שגיאה בעיבוד עמוד השער: ' + e.message;
+  }
+}
+coverDropZone.addEventListener('click', ()=>coverFileInput.click());
+coverFileInput.addEventListener('change', (e)=>handleCoverFile(e.target.files));
+['dragenter','dragover'].forEach(ev=>coverDropZone.addEventListener(ev,(e)=>{e.preventDefault(); coverDropZone.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>coverDropZone.addEventListener(ev,(e)=>{e.preventDefault(); coverDropZone.classList.remove('drag');}));
+coverDropZone.addEventListener('drop', (e)=>{ handleCoverFile(e.dataTransfer.files); });
 
 document.getElementById('selectAllBtn').addEventListener('click', async ()=>{
   bank.forEach(b=>b.included=true); await saveBank(); await renderBank();
