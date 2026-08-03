@@ -461,7 +461,10 @@ async function parsePdfFile(file, subject){
 async function parseCoverOnlyFile(file, subject){
   const buf = await file.arrayBuffer();
   const srcDoc = await PDFDocument.load(new Uint8Array(buf));
-  const bytes = await srcDoc.save();
+  const newDoc = await PDFDocument.create();
+  const [firstPage] = await newDoc.copyPages(srcDoc, [0]); // only page 1, no matter how long the source file is
+  newDoc.addPage(firstPage);
+  const bytes = await newDoc.save();
   return {
     id: 'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
     source: file.name,
@@ -785,7 +788,7 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     try{
       if(window.fontkit){
         finalDoc.registerFontkit(window.fontkit);
-        const fontResp = await fetch('https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/alef/Alef-Regular.ttf');
+        const fontResp = await fetch('https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/alef/Alef-Bold.ttf');
         if(fontResp.ok){
           const fontBytes = await fontResp.arrayBuffer();
           hebrewFont = await finalDoc.embedFont(fontBytes, {subset:true});
@@ -814,19 +817,21 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
         const box = item.headingBox;
         const newNum = String(i+1);
         const firstPage = pages[0];
-        const pad = 3;
+        const pad = 6;
+        const newSize = box.fontSize * 1.2;        // slightly bigger
+        const newY = box.y - box.fontSize * 0.5;   // sit a bit lower than the original line
         const label = `${newNum} ${reverseHeb('שאלה')}`; // digits (LTR) + reversed Hebrew word, drawn LTR = correct RTL visual
         firstPage.drawRectangle({
-          x: box.xLeft - pad,
-          y: box.y - box.fontSize*0.3,
-          width: (box.xRight - box.xLeft) + pad*2,
-          height: box.fontSize*1.2,
+          x: box.xLeft - pad*3,
+          y: box.y - box.fontSize*0.9,
+          width: (box.xRight - box.xLeft) + pad*6,
+          height: box.fontSize*2.2,
           color: PDFLib.rgb(1,1,1)
         });
         firstPage.drawText(label, {
           x: box.xLeft,
-          y: box.y,
-          size: box.fontSize,
+          y: newY,
+          size: newSize,
           font: hebrewFont,
           color: PDFLib.rgb(0,0,0)
         });
