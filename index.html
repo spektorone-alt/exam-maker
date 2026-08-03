@@ -114,6 +114,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v8 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -299,6 +300,7 @@ async function parsePdfFile(file, subject){
   const HEADING_RE_1 = /^שאלה\s*[:.]?\s*(\d+)/;   // "שאלה 1" (start-anchored only — line may continue with body text if merged)
   const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה\b/; // "1 שאלה"
   const FOOTER_RE = /עמוד\s*\d+|מתוך\s*\d+|^\d+\s*\/\s*\d+$/;
+  const BOILERPLATE_RE = /בהצלחה|כל הזכויות שמורות|©/;
 
   for(let p=1;p<=numPages;p++){
     const page = await pdfjsDoc.getPage(p);
@@ -362,14 +364,23 @@ async function parsePdfFile(file, subject){
       headings.push({pageNum:p, num:m[1], headingBox, numberBox});
     }
 
-    // detect a page-number style footer independently (works even without a heading on the page)
+    // detect footer-style content independently (works even without a heading on the page).
+    // check the last few lines (not just the very bottommost) since some templates have
+    // multi-line footers (e.g. a page-number line plus a separate "good luck / copyright" line).
     if(lines.length){
-      const bottomLine = lines[lines.length-1]; // lines sorted top-first, so last = bottommost
-      const txt = bottomLine.parts.map(pt=>pt.str).join(' ').trim();
-      if(FOOTER_RE.test(txt) && bottomLine.y < pageDims[p].height*0.15){
-        const fs = bottomLine.parts[0]?.fontSize || 10;
-        pageFooterY[p] = bottomLine.y + fs*1.3;
+      const candidates = lines.slice(-4); // bottom-most up-to-4 lines, in top-to-bottom order
+      let cutY = null;
+      for(const ln of candidates){
+        const txt = ln.parts.map(pt=>pt.str).join(' ').trim();
+        const isBoilerplate = BOILERPLATE_RE.test(txt);
+        const isPageNum = FOOTER_RE.test(txt) && ln.y < pageDims[p].height*0.2;
+        if(isBoilerplate || isPageNum){
+          const fs = ln.parts[0]?.fontSize || 10;
+          const candidateCut = ln.y + fs*1.3;
+          if(cutY === null || candidateCut > cutY) cutY = candidateCut;
+        }
       }
+      if(cutY !== null) pageFooterY[p] = cutY;
     }
   }
 
