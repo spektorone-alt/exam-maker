@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>מרכיב מבחנים אוטומטי</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 <style>
   :root{
@@ -291,6 +292,7 @@ async function parsePdfFile(file, subject){
 
     let matchedNum = null;
     let numberBox = null;
+    let headingBox = null;
     for(const line of lines){
       line.parts.sort((a,b)=>a.x-b.x);
       const lineText = line.parts.map(pt=>pt.str).join(' ').replace(/\s+/g,' ').trim();
@@ -298,7 +300,15 @@ async function parsePdfFile(file, subject){
       const m = lineText.match(HEADING_RE_1) || lineText.match(HEADING_RE_2);
       if(m){
         matchedNum = m[1];
-        // find the specific part that is purely digits (the number token)
+
+        // whole-line bounding box (word + number together) — used to redraw the full "שאלה N" label
+        const xLeft = Math.min(...line.parts.map(pt=>pt.x));
+        const xRight = Math.max(...line.parts.map(pt=>pt.x + (pt.width || pt.fontSize*0.55*pt.str.length)));
+        const avgFontSize = line.parts.reduce((s,pt)=>s+pt.fontSize,0) / line.parts.length;
+        const yTop = line.parts[0].y;
+        headingBox = { xLeft, xRight, y: yTop, fontSize: avgFontSize };
+
+        // find the specific part that is purely digits (the number token) — used as a lighter-weight fallback
         const digitPart = line.parts.find(pt => /^\d+$/.test(pt.str.trim()));
         if(digitPart){
           numberBox = {
@@ -324,7 +334,7 @@ async function parsePdfFile(file, subject){
         break;
       }
     }
-    if(matchedNum !== null) headings.push({pageNum:p, num:matchedNum, numberBox});
+    if(matchedNum !== null) headings.push({pageNum:p, num:matchedNum, numberBox, headingBox});
   }
 
   let groups = [];
@@ -334,13 +344,13 @@ async function parsePdfFile(file, subject){
     for(let i=0;i<headings.length;i++){
       const start = headings[i].pageNum;
       const end = (i+1<headings.length) ? headings[i+1].pageNum-1 : numPages;
-      groups.push({label:'שאלה '+headings[i].num, pages: rangeArr(start,end), numberBox: headings[i].numberBox});
+      groups.push({label:'שאלה '+headings[i].num, pages: rangeArr(start,end), numberBox: headings[i].numberBox, headingBox: headings[i].headingBox});
     }
   } else {
     coverPages = numPages>1 ? [1] : [];
     const startPage = numPages>1 ? 2 : 1;
     for(let p=startPage;p<=numPages;p++){
-      groups.push({label:'עמוד '+p, pages:[p], numberBox:null});
+      groups.push({label:'עמוד '+p, pages:[p], numberBox:null, headingBox:null});
     }
   }
 
@@ -361,7 +371,8 @@ async function parsePdfFile(file, subject){
       base64: arrayBufferToBase64(bytes),
       included: true,
       subject: subject,
-      numberBox: g.numberBox || null
+      numberBox: g.numberBox || null,
+      headingBox: g.headingBox || null
     });
   }
 
@@ -663,6 +674,22 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
 
     const finalDoc = await PDFDocument.create();
     const numberFont = await finalDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+
+    // try to embed a real Hebrew font so we can redraw the full "שאלה N" label (not just the digit)
+    let hebrewFont = null;
+    try{
+      if(window.fontkit){
+        finalDoc.registerFontkit(window.fontkit);
+        const fontResp = await fetch('https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/alef/Alef-Regular.ttf');
+        if(fontResp.ok){
+          const fontBytes = await fontResp.arrayBuffer();
+          hebrewFont = await finalDoc.embedFont(fontBytes, {subset:true});
+        }
+      }
+    }catch(e){ console.warn('Hebrew font embed failed, will fall back to digit-only renumbering', e); }
+
+    function reverseHeb(s){ return s.split('').reverse().join(''); }
+
     const coverId = coverSelect.value;
     if(coverId){
       const coverItem = covers.find(c=>c.id===coverId);
@@ -678,7 +705,27 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
       const pages = await finalDoc.copyPages(itemDoc, itemDoc.getPageIndices());
       pages.forEach(p=>finalDoc.addPage(p));
 
-      if(item.numberBox && pages.length){
+      if(hebrewFont && item.headingBox && pages.length){
+        const box = item.headingBox;
+        const newNum = String(i+1);
+        const firstPage = pages[0];
+        const pad = 3;
+        const label = `${newNum} ${reverseHeb('שאלה')}`; // digits (LTR) + reversed Hebrew word, drawn LTR = correct RTL visual
+        firstPage.drawRectangle({
+          x: box.xLeft - pad,
+          y: box.y - box.fontSize*0.3,
+          width: (box.xRight - box.xLeft) + pad*2,
+          height: box.fontSize*1.2,
+          color: PDFLib.rgb(1,1,1)
+        });
+        firstPage.drawText(label, {
+          x: box.xLeft,
+          y: box.y,
+          size: box.fontSize,
+          font: hebrewFont,
+          color: PDFLib.rgb(0,0,0)
+        });
+      } else if(item.numberBox && pages.length){
         const box = item.numberBox;
         const newNum = String(i+1);
         const firstPage = pages[0];
@@ -706,9 +753,10 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     const url = URL.createObjectURL(blob);
 
     genStatus.className='status ok';
-    const missingBoxCount = selected.filter(s=>!s.numberBox).length;
+    const missingBoxCount = selected.filter(s=>!s.headingBox && !s.numberBox).length;
     genStatus.innerHTML = `המבחן הורכב בהצלחה מ-${n} שאלות, ממוספרות מחדש 1–${n}: ${selected.map(s=>s.label).join(', ')}` +
-      (missingBoxCount ? `<br>⚠️ ב-${missingBoxCount} מהשאלות לא זוהה מיקום מספר מדויק, ולכן המספור המקורי שלהן נשאר כפי שהיה.` : '');
+      (missingBoxCount ? `<br>⚠️ ב-${missingBoxCount} מהשאלות לא זוהה מיקום כותרת מדויק, ולכן המספור המקורי שלהן נשאר כפי שהיה.` : '') +
+      (!hebrewFont ? `<br>ℹ️ לא הצלחתי לטעון גופן עברי (יתכן שאין חיבור אינטרנט כרגע) — הוחלף רק המספר עצמו, לא כל הכותרת.` : '');
 
     downloadArea.innerHTML = `
       <div class="download-box">
