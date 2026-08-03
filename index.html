@@ -188,7 +188,7 @@
 
   <div class="footer-note">
     שימו לב: כל שאלה נשמרת ומועתקת כעמוד PDF מקורי (לא כתמונה) — כך שרטוטי המעגלים, הנוסחאות והפורמט נשמרים במדויק.
-    מספרי השאלות בגוף המסמך נשארים כפי שהיו במבחן המקור; טבלת הניקוד הכוללת בעמוד השער אינה מתעדכנת אוטומטית לפי הבחירה החדשה.
+    מספרי השאלות ("שאלה 1", "שאלה 2"...) ממוספרים מחדש ברצף לפי סדר הופעתם במבחן החדש. טבלת הניקוד הכוללת בעמוד השער אינה מתעדכנת אוטומטית לפי הבחירה החדשה.
     הבנק נשמר אוטומטית בדפדפן שלכם (אישי, לא משותף) כך שבפעם הבאה שתפתחו את האפליקציה הוא עדיין יהיה כאן.
   </div>
 
@@ -282,18 +282,49 @@ async function parsePdfFile(file, subject){
       const y = Math.round(item.transform[5]);
       let line = lines.find(l => Math.abs(l.y - y) <= 2);
       if(!line){ line = {y, parts:[]}; lines.push(line); }
-      line.parts.push({x:item.transform[4], str:item.str});
+      line.parts.push({
+        x:item.transform[4], y:item.transform[5], str:item.str,
+        width:item.width || 0,
+        fontSize: Math.hypot(item.transform[2], item.transform[3]) || 10
+      });
     }
 
     let matchedNum = null;
+    let numberBox = null;
     for(const line of lines){
       line.parts.sort((a,b)=>a.x-b.x);
       const lineText = line.parts.map(pt=>pt.str).join(' ').replace(/\s+/g,' ').trim();
       if(!lineText) continue;
       const m = lineText.match(HEADING_RE_1) || lineText.match(HEADING_RE_2);
-      if(m){ matchedNum = m[1]; break; }
+      if(m){
+        matchedNum = m[1];
+        // find the specific part that is purely digits (the number token)
+        const digitPart = line.parts.find(pt => /^\d+$/.test(pt.str.trim()));
+        if(digitPart){
+          numberBox = {
+            x: digitPart.x, y: digitPart.y,
+            width: digitPart.width || (digitPart.fontSize*0.6*digitPart.str.trim().length),
+            fontSize: digitPart.fontSize
+          };
+        } else {
+          // digits are embedded together with the word in one text run — estimate position proportionally
+          const part = line.parts.find(pt => /\d/.test(pt.str));
+          if(part){
+            const full = part.str;
+            const idx = full.search(/\d+/);
+            const digits = full.match(/\d+/)[0];
+            const charW = (part.width || (part.fontSize*0.55*full.length)) / full.length;
+            numberBox = {
+              x: part.x + charW*idx, y: part.y,
+              width: charW*digits.length,
+              fontSize: part.fontSize
+            };
+          }
+        }
+        break;
+      }
     }
-    if(matchedNum !== null) headings.push({pageNum:p, num:matchedNum});
+    if(matchedNum !== null) headings.push({pageNum:p, num:matchedNum, numberBox});
   }
 
   let groups = [];
@@ -303,13 +334,13 @@ async function parsePdfFile(file, subject){
     for(let i=0;i<headings.length;i++){
       const start = headings[i].pageNum;
       const end = (i+1<headings.length) ? headings[i+1].pageNum-1 : numPages;
-      groups.push({label:'שאלה '+headings[i].num, pages: rangeArr(start,end)});
+      groups.push({label:'שאלה '+headings[i].num, pages: rangeArr(start,end), numberBox: headings[i].numberBox});
     }
   } else {
     coverPages = numPages>1 ? [1] : [];
     const startPage = numPages>1 ? 2 : 1;
     for(let p=startPage;p<=numPages;p++){
-      groups.push({label:'עמוד '+p, pages:[p]});
+      groups.push({label:'עמוד '+p, pages:[p], numberBox:null});
     }
   }
 
@@ -329,7 +360,8 @@ async function parsePdfFile(file, subject){
       pages: g.pages,
       base64: arrayBufferToBase64(bytes),
       included: true,
-      subject: subject
+      subject: subject,
+      numberBox: g.numberBox || null
     });
   }
 
@@ -630,6 +662,7 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     const selected = shuffled.slice(0, n);
 
     const finalDoc = await PDFDocument.create();
+    const numberFont = await finalDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
     const coverId = coverSelect.value;
     if(coverId){
       const coverItem = covers.find(c=>c.id===coverId);
@@ -639,17 +672,43 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
         pages.forEach(p=>finalDoc.addPage(p));
       }
     }
-    for(const item of selected){
+    for(let i=0;i<selected.length;i++){
+      const item = selected[i];
       const itemDoc = await PDFDocument.load(base64ToArrayBuffer(item.base64));
       const pages = await finalDoc.copyPages(itemDoc, itemDoc.getPageIndices());
       pages.forEach(p=>finalDoc.addPage(p));
+
+      if(item.numberBox && pages.length){
+        const box = item.numberBox;
+        const newNum = String(i+1);
+        const firstPage = pages[0];
+        const pad = 2;
+        // erase original number with a white rectangle
+        firstPage.drawRectangle({
+          x: box.x - pad,
+          y: box.y - box.fontSize*0.28,
+          width: Math.max(box.width, box.fontSize*0.7*newNum.length) + pad*2,
+          height: box.fontSize*1.15,
+          color: PDFLib.rgb(1,1,1)
+        });
+        // draw the new sequential number in its place
+        firstPage.drawText(newNum, {
+          x: box.x,
+          y: box.y,
+          size: box.fontSize,
+          font: numberFont,
+          color: PDFLib.rgb(0,0,0)
+        });
+      }
     }
     const outBytes = await finalDoc.save();
     const blob = new Blob([outBytes], {type:'application/pdf'});
     const url = URL.createObjectURL(blob);
 
     genStatus.className='status ok';
-    genStatus.textContent = `המבחן הורכב בהצלחה מ-${n} שאלות: ${selected.map(s=>s.label).join(', ')}`;
+    const missingBoxCount = selected.filter(s=>!s.numberBox).length;
+    genStatus.innerHTML = `המבחן הורכב בהצלחה מ-${n} שאלות, ממוספרות מחדש 1–${n}: ${selected.map(s=>s.label).join(', ')}` +
+      (missingBoxCount ? `<br>⚠️ ב-${missingBoxCount} מהשאלות לא זוהה מיקום מספר מדויק, ולכן המספור המקורי שלהן נשאר כפי שהיה.` : '');
 
     downloadArea.innerHTML = `
       <div class="download-box">
