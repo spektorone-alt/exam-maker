@@ -114,7 +114,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v12 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v13 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -298,11 +298,41 @@ async function parsePdfFile(file, subject){
   const pageFooterY = {};          // pageNum -> y cutoff (below which = footer, to be stripped) or undefined
   const pageDims = {};             // pageNum -> {width, height}
   const HEADING_RE_1 = /^שאלה\s*[:.]?\s*(\d+)/;   // "שאלה 1" (start-anchored only — line may continue with body text if merged)
-  const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה\b/; // "1 שאלה"
+  const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה(?=\s|$)/; // "1 שאלה"
   const FOOTER_RE = /עמוד\s*\d+|מתוך\s*\d+|^\d+\s*\/\s*\d+$/;
   const BOILERPLATE_RE = /בהצלחה|כל הזכויות שמורות|©/;
   let totalTextItems = 0;
   let debugSample = '';
+
+  const HEB_CHAR_RE = /^[\u0590-\u05FF]$/;
+  const DIGIT_CHAR_RE = /^[0-9]$/;
+  function buildLineText(parts){
+    // Some PDF exports fragment text letter-by-letter instead of word-by-word. Two issues:
+    //  1) naively joining every fragment with a space would turn "שאלה" into "ש א ל ה"
+    //  2) sorting single Hebrew letters by x (needed for layout) actually REVERSES their
+    //     reading order (e.g. "שאלה" -> "הלאש"), since Hebrew is RTL — so consecutive
+    //     single-letter Hebrew runs need to be reversed back before concatenating.
+    const groups = [];
+    let gi = 0;
+    while(gi < parts.length){
+      const cur = parts[gi];
+      if(HEB_CHAR_RE.test(cur.str)){
+        let gj = gi;
+        while(gj < parts.length && HEB_CHAR_RE.test(parts[gj].str)) gj++;
+        groups.push(parts.slice(gi,gj).reverse().map(p=>p.str).join(''));
+        gi = gj;
+      } else if(DIGIT_CHAR_RE.test(cur.str)){
+        let gj = gi;
+        while(gj < parts.length && DIGIT_CHAR_RE.test(parts[gj].str)) gj++;
+        groups.push(parts.slice(gi,gj).map(p=>p.str).join(''));
+        gi = gj;
+      } else {
+        groups.push(cur.str);
+        gi++;
+      }
+    }
+    return groups.join(' ').replace(/\s+/g,' ').trim().normalize('NFKC');
+  }
 
   for(let p=1;p<=numPages;p++){
     const page = await pdfjsDoc.getPage(p);
@@ -332,7 +362,7 @@ async function parsePdfFile(file, subject){
 
     // detect ALL heading lines on this page (a page can legitimately contain 2+ questions)
     for(const line of lines){
-      const lineText = line.parts.map(pt=>pt.str).join(' ').replace(/\s+/g,' ').trim().normalize('NFKC');
+      const lineText = buildLineText(line.parts);
       if(!lineText) continue;
       const m = lineText.match(HEADING_RE_1) || lineText.match(HEADING_RE_2);
       if(!m) continue;
@@ -377,7 +407,7 @@ async function parsePdfFile(file, subject){
       const candidates = lines.slice(-4); // bottom-most up-to-4 lines, in top-to-bottom order
       let cutY = null;
       for(const ln of candidates){
-        const txt = ln.parts.map(pt=>pt.str).join(' ').trim().normalize('NFKC');
+        const txt = buildLineText(ln.parts);
         const isBoilerplate = BOILERPLATE_RE.test(txt);
         const isPageNum = FOOTER_RE.test(txt) && ln.y < pageDims[p].height*0.2;
         if(isBoilerplate || isPageNum){
