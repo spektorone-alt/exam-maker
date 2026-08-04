@@ -114,7 +114,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v10 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v11 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -326,7 +326,7 @@ async function parsePdfFile(file, subject){
 
     // detect ALL heading lines on this page (a page can legitimately contain 2+ questions)
     for(const line of lines){
-      const lineText = line.parts.map(pt=>pt.str).join(' ').replace(/\s+/g,' ').trim();
+      const lineText = line.parts.map(pt=>pt.str).join(' ').replace(/\s+/g,' ').trim().normalize('NFKC');
       if(!lineText) continue;
       const m = lineText.match(HEADING_RE_1) || lineText.match(HEADING_RE_2);
       if(!m) continue;
@@ -371,7 +371,7 @@ async function parsePdfFile(file, subject){
       const candidates = lines.slice(-4); // bottom-most up-to-4 lines, in top-to-bottom order
       let cutY = null;
       for(const ln of candidates){
-        const txt = ln.parts.map(pt=>pt.str).join(' ').trim();
+        const txt = ln.parts.map(pt=>pt.str).join(' ').trim().normalize('NFKC');
         const isBoilerplate = BOILERPLATE_RE.test(txt);
         const isPageNum = FOOTER_RE.test(txt) && ln.y < pageDims[p].height*0.2;
         if(isBoilerplate || isPageNum){
@@ -536,7 +536,8 @@ async function handleFiles(fileList){
       const {items, coverItem} = await parsePdfFile(file, subject);
       bank.push(...items);
       if(coverItem) covers.push(coverItem);
-      summaries.push(`"${file.name}": ${coverItem ? 'זוהה עמוד שער ✓' : 'ללא עמוד שער'}, ${items.length} שאלות זוהו`);
+      const labelList = items.map(it=>it.label).join(', ') || '(אין)';
+      summaries.push(`"${file.name}": ${coverItem ? 'זוהה עמוד שער ✓' : 'ללא עמוד שער'}, ${items.length} שאלות זוהו: ${labelList}`);
     }catch(e){
       console.error(e);
       uploadStatus.className='status err';
