@@ -108,6 +108,17 @@
   .bank-group table{ margin:0; }
   .bank-group th, .bank-group td{ padding:8px 12px; }
   input[type=checkbox]{width:17px; height:17px; cursor:pointer;}
+  .review-item{
+    border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px;
+    display:flex; align-items:flex-start; gap:12px; background:#fafbfd;
+  }
+  .review-item .rthumb{width:46px; height:60px; object-fit:cover; border:1px solid var(--border); border-radius:4px; flex-shrink:0;}
+  .review-item .rmain{flex:1; min-width:0;}
+  .review-item .rtitle{font-weight:700; font-size:14px;}
+  .review-item .redit-panel{margin-top:8px; background:#fff; border:1px dashed var(--border); border-radius:8px; padding:8px;}
+  .num-edit-row{display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:13px;}
+  .num-edit-row input{width:90px; padding:5px 8px; border:1px solid var(--border); border-radius:6px;}
+  .edited-badge{font-size:11px; background:#eefaf1; color:var(--good); border:1px solid #c6ebd2; padding:1px 8px; border-radius:10px; margin-inline-start:6px;}
 </style>
 </head>
 <body>
@@ -115,7 +126,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v15 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v24 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -206,6 +217,7 @@
     </div>
     <button class="btn" id="generateBtn">🎲 הרכב מבחן אקראי</button>
     <div class="status" id="generateStatus"></div>
+    <div id="reviewArea" style="margin-top:16px;"></div>
     <div id="downloadArea" style="margin-top:16px;"></div>
   </div>
 
@@ -303,8 +315,8 @@ async function getTesseractWorker(){
 // OCR a page that has no extractable text layer (scanned image). Returns items in the
 // same shape as pdf.js text-content items (str, transform, width) so all downstream
 // heading/footer detection code can run completely unchanged.
-async function ocrPageWords(pdfjsPage, pageHeight, onStatus){
-  const scale = 2.2;
+async function ocrPageWords(pdfjsPage, pageHeight, onStatus, scale){
+  scale = scale || 2.2;
   const viewport = pdfjsPage.getViewport({scale});
   const canvas = document.createElement('canvas');
   canvas.width = viewport.width;
@@ -915,10 +927,288 @@ document.getElementById('clearBankBtn').addEventListener('click', async ()=>{
 filterSubjectSelect.addEventListener('change', renderBank);
 buildSubjectSelect.addEventListener('change', renderBank);
 
+let currentSelection = []; // items chosen for the exam currently being built, may include per-item edits
+
+async function detectEditableNumbers(base64, onStatus){
+  const bytes = base64ToArrayBuffer(base64);
+  const pdfjsDoc = await pdfjsLib.getDocument({data: bytes}).promise;
+  const page = await pdfjsDoc.getPage(1);
+  const content = await page.getTextContent();
+  const viewport = page.getViewport({scale:1});
+
+  let sourceItems = content.items;
+  if(sourceItems.length === 0){
+    // scanned page, no text layer at all — OCR the whole page so we can find numbers too
+    if(onStatus) onStatus('עמוד סרוק — מריץ OCR כדי לאתר מספרים (זה עלול לקחת כמה שניות)...');
+    try{
+      sourceItems = await ocrPageWords(page, viewport.height, onStatus, 3.4);
+    }catch(e){
+      console.warn('OCR failed while detecting editable numbers', e);
+      sourceItems = [];
+    }
+  }
+
+  // recognized electrical/physical units (with common metric prefixes) — numbers without
+  // one of these attached are ignored (question numbers, page numbers, point values, etc.)
+  const UNIT_CORE = '(?:Ω|\u2126|V|A|W|Hz|H|F|S|rad\\/s(?:ec)?|rad)';
+  const UNIT_PATTERN = '(?:k|K|m|M|μ|u|n|p)?' + UNIT_CORE + '|°C|°F';
+  const HEB_UNIT_WORDS = ['וולט','וואט','אוהם','אום','אמפר','מעלות','מעלות צלזיוס','הרץ','הנרי','פאראד','שניות','שנייה','רדיאן'];
+  const COMBINED_RE = new RegExp('^(\\d+(?:\\.\\d+)?)\\s*(' + UNIT_PATTERN + ')$');
+  const UNIT_ONLY_RE = new RegExp('^(' + UNIT_PATTERN + ')$');
+  const isHebUnitWord = (s) => HEB_UNIT_WORDS.includes(s.trim());
+  const norm = (s) => (s||'').normalize('NFKC');
+
+  // group items into visual lines by y-position (used to build readable "context" text)
+  const lines = [];
+  for(const item of sourceItems){
+    if(!item.str || !item.str.trim()) continue;
+    const y = Math.round(item.transform[5]);
+    let line = lines.find(l => Math.abs(l.y - y) <= 5);
+    if(!line){ line = {y, parts:[]}; lines.push(line); }
+    line.parts.push({
+      x:item.transform[4], y:item.transform[5], str:item.str,
+      width:item.width || 0, fontSize: Math.hypot(item.transform[2], item.transform[3]) || 10
+    });
+  }
+  lines.forEach(l => l.parts.sort((a,b)=>a.x-b.x));
+  lines.sort((a,b)=>b.y-a.y);
+
+  // Some PDFs fragment numbers/units into individual characters, e.g. "15.915mH" becomes
+  // separate items "1","5",".","9","1","5","m","H". Merge adjacent digit/decimal/unit-letter
+  // fragments (small gap, same line) back into coherent tokens before matching.
+  const FRAG_RE = /^[0-9.a-zA-ZΩμ°\u2126]+$/;
+  lines.forEach(line => {
+    const merged = [];
+    let i = 0;
+    while(i < line.parts.length){
+      let acc = line.parts[i];
+      let str = acc.str, endX = acc.x + (acc.width || acc.fontSize*0.5);
+      let j = i+1;
+      while(j < line.parts.length){
+        const next = line.parts[j];
+        const gap = next.x - endX;
+        if(gap < acc.fontSize*0.35 && FRAG_RE.test(acc.str) && FRAG_RE.test(next.str)){
+          str += next.str;
+          endX = next.x + (next.width || next.fontSize*0.5);
+          acc = next;
+          j++;
+        } else break;
+      }
+      merged.push({ x: line.parts[i].x, y: line.parts[i].y, str, width: endX-line.parts[i].x, fontSize: line.parts[i].fontSize });
+      i = j;
+    }
+    line.parts = merged;
+  });
+
+  // flat list of every token, for proximity-based pairing (diagram labels are often not on
+  // a clean shared "line" the way body text is — a component's unit can sit slightly above,
+  // below, or with extra spacing from its number)
+  const allParts = [];
+  lines.forEach(l => l.parts.forEach(p => allParts.push(p)));
+
+  function contextNear(part){
+    // use just the same visual line as the number itself — far more readable and predictable
+    // than pulling in nearby text from other lines (which can jumble math formulas with sub/superscripts)
+    const line = lines.find(l => Math.abs(l.y - part.y) <= 5);
+    if(!line) return part.str;
+    return line.parts.map(p=>p.str).join(' ').replace(/\s+/g,' ').trim().slice(0,70);
+  }
+
+  function isLikelyFalsePositive(part){
+    // exclude numbers that are really "איור לשאלה N" (figure/question refs) or "(N נק')" (point values) —
+    // check only the IMMEDIATE same-line neighbors, not a broad radius (a radius search would wrongly
+    // exclude real diagram values just because a figure caption happens to sit nearby).
+    const sameLine = allParts
+      .filter(p => Math.abs(p.y - part.y) <= 3)
+      .sort((a,b)=>a.x-b.x);
+    const idx = sameLine.indexOf(part);
+    if(idx === -1) return false;
+    const prev1 = sameLine[idx-1], prev2 = sameLine[idx-2];
+    const next1 = sameLine[idx+1];
+    const prevText = [prev2,prev1].filter(Boolean).map(p=>p.str.trim()).join(' ');
+    const nextText = (next1 ? next1.str.trim() : '');
+    if(/^נק/.test(nextText)) return true;                  // number immediately followed by "נק'" — a points value
+    if(/לשאלה\s*$/.test(prevText) || /^איור/.test(prevText)) return true; // number immediately after "איור לשאלה" — a figure/question reference
+    return false;
+  }
+
+  function classifyGroup(part){
+    // "question" data usually appears right after a "נתון:" label in a text paragraph;
+    // "circuit" values are terse labels sitting directly on the diagram with no such wording nearby.
+    const wideRadius = part.fontSize * 18;
+    const wideNearby = allParts.filter(p => Math.hypot(p.x-part.x, p.y-part.y) <= wideRadius);
+    const wideText = wideNearby.map(p=>p.str).join(' ');
+    return /נתון/.test(wideText) ? 'question' : 'circuit';
+  }
+
+  const nums = [];
+  for(const part of allParts){
+    const s = norm(part.str.trim());
+
+    // case 1: number and unit combined in one token, e.g. "100Ω" or "20V"
+    const m = s.match(COMBINED_RE);
+    if(m){
+      if(!isLikelyFalsePositive(part)){
+        nums.push({
+          id: 'n_'+Math.random().toString(36).slice(2,8),
+          value: m[1], unit: m[2], context: contextNear(part), group: classifyGroup(part),
+          x: part.x, y: part.y, fontSize: part.fontSize,
+          width: part.width ? part.width * (m[1].length/s.length) : part.fontSize*0.6*m[1].length
+        });
+      }
+      continue;
+    }
+    if(!/^\d+(\.\d+)?$/.test(s)) continue;
+
+    // case 2: find the NEAREST separate unit-bearing token within a reasonable radius —
+    // not necessarily on the exact same line (diagram labels are often stacked or offset)
+    let best = null, bestDist = Infinity;
+    for(const other of allParts){
+      if(other === part) continue;
+      const os = norm(other.str.trim());
+      if(!(UNIT_ONLY_RE.test(os) || isHebUnitWord(os))) continue;
+      const dist = Math.hypot(other.x - part.x, other.y - part.y);
+      if(dist < bestDist && dist < part.fontSize*5){ bestDist = dist; best = other; }
+    }
+    if(best && !isLikelyFalsePositive(part)){
+      nums.push({
+        id: 'n_'+Math.random().toString(36).slice(2,8),
+        value: s, unit: best.str.trim(), context: contextNear(part), group: classifyGroup(part),
+        x: part.x, y: part.y, fontSize: part.fontSize,
+        width: part.width || part.fontSize*0.6*s.length
+      });
+    }
+  }
+  const debugTokens = allParts.map(p => `"${p.str}"@(${Math.round(p.x)},${Math.round(p.y)})`);
+  return {nums, debugTokens};
+}
+
+async function applyNumberEdits(base64, edits){
+  const srcDoc = await PDFDocument.load(base64ToArrayBuffer(base64));
+  const numberFont = await srcDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const page = srcDoc.getPages()[0];
+  for(const e of edits){
+    const pad = 2;
+    page.drawRectangle({
+      x: e.x - pad, y: e.y - e.fontSize*0.28,
+      width: Math.max(e.width, e.fontSize*0.6*e.newValue.length) + pad*2,
+      height: e.fontSize*1.15,
+      color: PDFLib.rgb(1,1,1)
+    });
+    page.drawText(e.newValue, {x: e.x, y: e.y, size: e.fontSize, font: numberFont, color: PDFLib.rgb(0,0,0)});
+  }
+  const bytes = await srcDoc.save();
+  return arrayBufferToBase64(bytes);
+}
+
+async function renderReview(){
+  const reviewArea = document.getElementById('reviewArea');
+  document.getElementById('downloadArea').innerHTML = '';
+  if(!currentSelection.length){ reviewArea.innerHTML = ''; return; }
+
+  let html = `<div class="card" style="padding:14px;"><h2 style="font-size:15px; margin-bottom:10px;">בחירה נוכחית — אפשר לערוך מספרים לפני ההפקה</h2>`;
+  currentSelection.forEach((item, i)=>{
+    html += `<div class="review-item" data-idx="${i}">
+      <img class="rthumb" id="rthumb-${i}" src="" alt="">
+      <div class="rmain">
+        <div class="rtitle">${i+1}. ${item.label} <span class="muted">(${item.source})</span>${item._edited ? '<span class="edited-badge">✏️ נערך</span>':''}</div>
+        <div class="row-actions" style="margin-top:6px;">
+          <button class="btn secondary edit-nums-btn" data-idx="${i}" style="font-size:12px;">✏️ ערוך מספרים</button>
+        </div>
+        <div class="redit-panel" id="editpanel-${i}" style="display:none;"></div>
+      </div>
+    </div>`;
+  });
+  html += `<button class="btn" id="finalizeBtn" style="margin-top:8px;">📄 הפק PDF סופי</button></div>`;
+  reviewArea.innerHTML = html;
+
+  currentSelection.forEach((item,i)=>{
+    const img = document.getElementById('rthumb-'+i);
+    renderThumb(item._editedBase64 || item.base64).then(url=>{ if(url && img) img.src = url; });
+  });
+
+  document.querySelectorAll('.edit-nums-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const idx = parseInt(btn.getAttribute('data-idx'),10);
+      const panel = document.getElementById('editpanel-'+idx);
+      if(panel.style.display === 'block'){ panel.style.display='none'; return; }
+      panel.style.display = 'block';
+      panel.innerHTML = '<span class="muted">סורק מספרים בשאלה...</span>';
+      const item = currentSelection[idx];
+      try{
+        const {nums, debugTokens} = await detectEditableNumbers(item._editedBase64 || item.base64, (msg)=>{ panel.innerHTML = `<span class="muted"><span class="spinner"></span> ${msg}</span>`; });
+        item._debugTokens = debugTokens;
+        const debugToggle = `<div style="margin-top:8px;"><a href="#" class="dbg-toggle-link" data-idx="${idx}" style="font-size:11px; color:var(--muted);">🔍 הצג את כל האסימונים שזוהו בעמוד (דיבוג)</a><div class="dbg-tokens" id="dbgtok-${idx}" style="display:none; font-size:11px; color:var(--muted); margin-top:4px; max-height:120px; overflow:auto; background:#f7f8fb; border-radius:6px; padding:6px;">${debugTokens.join(' &nbsp; ')}</div></div>`;
+        if(!nums.length){
+          panel.innerHTML = '<span class="muted">לא נמצאו מספרים עם יחידת מידה מוכרת בשאלה זו (אם זו שאלה סרוקה, ה-OCR לא זיהה ערכים ברורים בעמוד).</span>' + debugToggle;
+          return;
+        }
+        item._detectedNums = nums;
+        const renderRow = (n) => `
+          <div class="num-edit-row">
+            <span class="muted" style="flex:1; text-align:right;">${n.context}</span>
+            <input type="text" data-numid="${n.id}" value="${n.value}">
+            <span class="muted">${n.unit}</span>
+          </div>`;
+        const circuitNums = nums.filter(n=>n.group==='circuit');
+        const questionNums = nums.filter(n=>n.group==='question');
+        let panelHtml = '';
+        if(circuitNums.length){
+          panelHtml += `<div style="font-weight:700; font-size:12px; margin-bottom:4px;">🔧 רכיבי המעגל (בשרטוט)</div>` + circuitNums.map(renderRow).join('');
+        }
+        if(questionNums.length){
+          panelHtml += `<div style="font-weight:700; font-size:12px; margin:8px 0 4px;">📋 נתוני השאלה (בטקסט)</div>` + questionNums.map(renderRow).join('');
+        }
+        panel.innerHTML = panelHtml +
+          `<button class="btn secondary save-nums-btn" data-idx="${idx}" style="font-size:12px; margin-top:8px;">💾 שמור שינויים</button>` +
+          debugToggle;
+      }catch(e){
+        console.error(e);
+        panel.innerHTML = '<span class="status err">שגיאה בסריקת מספרים: '+e.message+'</span>';
+      }
+    });
+  });
+
+  reviewArea.addEventListener('click', (e)=>{
+    if(!e.target.classList.contains('dbg-toggle-link')) return;
+    e.preventDefault();
+    const idx = e.target.getAttribute('data-idx');
+    const box = document.getElementById('dbgtok-'+idx);
+    if(box) box.style.display = (box.style.display==='none') ? 'block' : 'none';
+  });
+
+  reviewArea.addEventListener('click', async (e)=>{
+    if(!e.target.classList.contains('save-nums-btn')) return;
+    const idx = parseInt(e.target.getAttribute('data-idx'),10);
+    const item = currentSelection[idx];
+    const panel = document.getElementById('editpanel-'+idx);
+    const inputs = panel.querySelectorAll('input[data-numid]');
+    const edits = [];
+    inputs.forEach(inp=>{
+      const numId = inp.getAttribute('data-numid');
+      const orig = item._detectedNums.find(n=>n.id===numId);
+      if(orig && inp.value.trim() && inp.value.trim() !== orig.value){
+        edits.push({ x: orig.x, y: orig.y, fontSize: orig.fontSize, width: orig.width, newValue: inp.value.trim() });
+      }
+    });
+    if(!edits.length){ panel.style.display='none'; return; }
+    panel.innerHTML = '<span class="muted">שומר שינויים...</span>';
+    try{
+      const newBase64 = await applyNumberEdits(item._editedBase64 || item.base64, edits);
+      item._editedBase64 = newBase64;
+      item._edited = true;
+      await renderReview();
+    }catch(err){
+      console.error(err);
+      panel.innerHTML = '<span class="status err">שגיאה בשמירת השינויים: '+err.message+'</span>';
+    }
+  }, { once: true });
+}
+
 document.getElementById('generateBtn').addEventListener('click', async ()=>{
   const genStatus = document.getElementById('generateStatus');
-  const downloadArea = document.getElementById('downloadArea');
-  downloadArea.innerHTML = '';
+  document.getElementById('reviewArea').innerHTML = '';
+  document.getElementById('downloadArea').innerHTML = '';
   const n = parseInt(document.getElementById('numQuestions').value, 10);
   const buildSubject = buildSubjectSelect.value;
   if(!buildSubject){
@@ -931,16 +1221,26 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     genStatus.textContent = `במקצוע "${buildSubject}" יש רק ${included.length} שאלות מסומנות, לא ניתן לבחור ${n}.`;
     return;
   }
-  genStatus.className='status'; genStatus.innerHTML = '<span class="spinner"></span> מרכיב מבחן...';
+  const shuffled = [...included].sort(()=>Math.random()-0.5);
+  currentSelection = shuffled.slice(0, n).map(it=>({...it, _edited:false, _editedBase64:null, _detectedNums:null}));
+  genStatus.className='status ok';
+  genStatus.textContent = `נבחרו ${n} שאלות. אפשר לערוך מספרים בכל שאלה למטה, ואז ללחוץ "הפק PDF סופי".`;
+  await renderReview();
+});
+
+document.addEventListener('click', async (e)=>{
+  if(e.target.id !== 'finalizeBtn') return;
+  const genStatus = document.getElementById('generateStatus');
+  const downloadArea = document.getElementById('downloadArea');
+  downloadArea.innerHTML = '';
+  genStatus.className='status'; genStatus.innerHTML = '<span class="spinner"></span> מפיק PDF...';
 
   try{
-    const shuffled = [...included].sort(()=>Math.random()-0.5);
-    const selected = shuffled.slice(0, n);
-
+    const selected = currentSelection;
+    const n = selected.length;
     const finalDoc = await PDFDocument.create();
     const numberFont = await finalDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
 
-    // try to embed a real Hebrew font so we can redraw the full "שאלה N" label (not just the digit)
     let hebrewFont = null;
     try{
       if(window.fontkit){
@@ -964,7 +1264,7 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     }
     for(let i=0;i<selected.length;i++){
       const item = selected[i];
-      const itemDoc = await PDFDocument.load(base64ToArrayBuffer(item.base64));
+      const itemDoc = await PDFDocument.load(base64ToArrayBuffer(item._editedBase64 || item.base64));
       const pages = await finalDoc.copyPages(itemDoc, itemDoc.getPageIndices());
       pages.forEach(p=>finalDoc.addPage(p));
 
@@ -973,13 +1273,10 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
         const firstPage = pages[0];
         const {width, height} = firstPage.getSize();
         const HEADING_SIZE = 18;
-        const headingY = height - 45; // fixed, uniform position in the reserved blank strip
+        const headingY = height - 45;
         const rightMargin = 55;
 
         if(hebrewFont){
-          // Draw explicitly, letter by letter, right-to-left — no reliance on string reversal tricks.
-          // Hebrew word "שאלה" (letters in normal order ש,א,ל,ה) is placed starting from the right
-          // margin, each letter moving further left, guaranteeing ש ends up rightmost.
           const hebrewLetters = 'שאלה'.split('');
           let cursorX = width - rightMargin;
           for(const ch of hebrewLetters){
@@ -992,7 +1289,6 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
           cursorX -= spaceW;
           firstPage.drawText(newNum, { x: cursorX - numW, y: headingY, size: HEADING_SIZE, font: numberFont, color: PDFLib.rgb(0,0,0) });
         } else {
-          // no Hebrew font available (e.g. offline) — at least show the number clearly
           firstPage.drawText('#'+newNum, { x: width-rightMargin-40, y: headingY, size: HEADING_SIZE, font: numberFont, color: PDFLib.rgb(0,0,0) });
         }
       }
@@ -1003,7 +1299,9 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
 
     genStatus.className='status ok';
     const missingBoxCount = selected.filter(s=>!s.headingBox).length;
-    genStatus.innerHTML = `המבחן הורכב בהצלחה מ-${n} שאלות, ממוספרות מחדש 1–${n}: ${selected.map(s=>s.label).join(', ')}` +
+    const editedCount = selected.filter(s=>s._edited).length;
+    genStatus.innerHTML = `המבחן הופק בהצלחה מ-${n} שאלות, ממוספרות מחדש 1–${n}: ${selected.map(s=>s.label).join(', ')}` +
+      (editedCount ? `<br>✏️ ${editedCount} שאלות כוללות ערכים שנערכו ידנית.` : '') +
       (missingBoxCount ? `<br>⚠️ ב-${missingBoxCount} מהשאלות לא זוהתה כותרת "שאלה N" בבירור, ולכן הן הופיעו כמו שהיו במקור (בלי מספור חדש ובלי הסרת כותרות).` : '') +
       (!hebrewFont ? `<br>ℹ️ לא הצלחתי לטעון גופן עברי (יתכן שאין חיבור אינטרנט כרגע) — הוחלף רק המספר עצמו, לא כל הכותרת.` : '');
 
@@ -1015,7 +1313,7 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
   }catch(e){
     console.error(e);
     genStatus.className='status err';
-    genStatus.textContent = 'שגיאה בהרכבת המבחן: ' + e.message;
+    genStatus.textContent = 'שגיאה בהפקת המבחן: ' + e.message;
   }
 });
 
