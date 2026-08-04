@@ -126,7 +126,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v24 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v26 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -1112,6 +1112,7 @@ async function renderReview(){
       <img class="rthumb" id="rthumb-${i}" src="" alt="">
       <div class="rmain">
         <div class="rtitle">${i+1}. ${item.label} <span class="muted">(${item.source})</span>${item._edited ? '<span class="edited-badge">✏️ נערך</span>':''}</div>
+        ${item._justSaved ? '<div style="color:var(--good); font-size:12.5px; font-weight:700; margin-top:2px;">✅ נשמר בהצלחה!</div>' : ''}
         <div class="row-actions" style="margin-top:6px;">
           <button class="btn secondary edit-nums-btn" data-idx="${i}" style="font-size:12px;">✏️ ערוך מספרים</button>
         </div>
@@ -1169,40 +1170,45 @@ async function renderReview(){
     });
   });
 
-  reviewArea.addEventListener('click', (e)=>{
-    if(!e.target.classList.contains('dbg-toggle-link')) return;
-    e.preventDefault();
-    const idx = e.target.getAttribute('data-idx');
-    const box = document.getElementById('dbgtok-'+idx);
-    if(box) box.style.display = (box.style.display==='none') ? 'block' : 'none';
-  });
-
-  reviewArea.addEventListener('click', async (e)=>{
-    if(!e.target.classList.contains('save-nums-btn')) return;
-    const idx = parseInt(e.target.getAttribute('data-idx'),10);
-    const item = currentSelection[idx];
-    const panel = document.getElementById('editpanel-'+idx);
-    const inputs = panel.querySelectorAll('input[data-numid]');
-    const edits = [];
-    inputs.forEach(inp=>{
-      const numId = inp.getAttribute('data-numid');
-      const orig = item._detectedNums.find(n=>n.id===numId);
-      if(orig && inp.value.trim() && inp.value.trim() !== orig.value){
-        edits.push({ x: orig.x, y: orig.y, fontSize: orig.fontSize, width: orig.width, newValue: inp.value.trim() });
+  if(!reviewArea.dataset.delegated){
+    reviewArea.dataset.delegated = '1';
+    reviewArea.addEventListener('click', async (e)=>{
+      if(e.target.classList.contains('dbg-toggle-link')){
+        e.preventDefault();
+        const idx = e.target.getAttribute('data-idx');
+        const box = document.getElementById('dbgtok-'+idx);
+        if(box) box.style.display = (box.style.display==='none') ? 'block' : 'none';
+        return;
+      }
+      if(e.target.classList.contains('save-nums-btn')){
+        const idx = parseInt(e.target.getAttribute('data-idx'),10);
+        const item = currentSelection[idx];
+        const panel = document.getElementById('editpanel-'+idx);
+        const inputs = panel.querySelectorAll('input[data-numid]');
+        const edits = [];
+        inputs.forEach(inp=>{
+          const numId = inp.getAttribute('data-numid');
+          const orig = item._detectedNums.find(n=>n.id===numId);
+          if(orig && inp.value.trim() && inp.value.trim() !== orig.value){
+            edits.push({ x: orig.x, y: orig.y, fontSize: orig.fontSize, width: orig.width, newValue: inp.value.trim() });
+          }
+        });
+        if(!edits.length){ panel.style.display='none'; return; }
+        panel.innerHTML = '<span class="muted">שומר שינויים...</span>';
+        try{
+          const newBase64 = await applyNumberEdits(item._editedBase64 || item.base64, edits);
+          item._editedBase64 = newBase64;
+          item._edited = true;
+          item._justSaved = true;
+          await renderReview();
+          setTimeout(()=>{ item._justSaved=false; renderReview(); }, 3000);
+        }catch(err){
+          console.error(err);
+          panel.innerHTML = '<span class="status err">שגיאה בשמירת השינויים: '+err.message+'</span>';
+        }
       }
     });
-    if(!edits.length){ panel.style.display='none'; return; }
-    panel.innerHTML = '<span class="muted">שומר שינויים...</span>';
-    try{
-      const newBase64 = await applyNumberEdits(item._editedBase64 || item.base64, edits);
-      item._editedBase64 = newBase64;
-      item._edited = true;
-      await renderReview();
-    }catch(err){
-      console.error(err);
-      panel.innerHTML = '<span class="status err">שגיאה בשמירת השינויים: '+err.message+'</span>';
-    }
-  }, { once: true });
+  }
 }
 
 document.getElementById('generateBtn').addEventListener('click', async ()=>{
