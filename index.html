@@ -114,7 +114,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v11 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v12 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -301,10 +301,16 @@ async function parsePdfFile(file, subject){
   const HEADING_RE_2 = /^(\d+)\s*[:.]?\s*שאלה\b/; // "1 שאלה"
   const FOOTER_RE = /עמוד\s*\d+|מתוך\s*\d+|^\d+\s*\/\s*\d+$/;
   const BOILERPLATE_RE = /בהצלחה|כל הזכויות שמורות|©/;
+  let totalTextItems = 0;
+  let debugSample = '';
 
   for(let p=1;p<=numPages;p++){
     const page = await pdfjsDoc.getPage(p);
     const content = await page.getTextContent();
+    totalTextItems += content.items.length;
+    if(p===2 && !debugSample){
+      debugSample = content.items.slice(0,6).map(it=>JSON.stringify(it.str)).join(' | ');
+    }
     const viewport = page.getViewport({scale:1});
     pageDims[p] = {width: viewport.width, height: viewport.height};
 
@@ -501,7 +507,7 @@ async function parsePdfFile(file, subject){
     };
   }
 
-  return {items, coverItem};
+  return {items, coverItem, totalTextItems, debugSample};
 }
 
 // Parse a PDF meant purely as a cover/instructions template — used as-is, no question extraction.
@@ -533,11 +539,11 @@ async function handleFiles(fileList){
       // remove any previous entries from this exact filename first, so re-uploading replaces stale data
       bank = bank.filter(b => !(b.source === file.name && b.subject === subject));
       covers = covers.filter(c => !(c.source === file.name && c.subject === subject));
-      const {items, coverItem} = await parsePdfFile(file, subject);
+      const {items, coverItem, totalTextItems, debugSample} = await parsePdfFile(file, subject);
       bank.push(...items);
       if(coverItem) covers.push(coverItem);
       const labelList = items.map(it=>it.label).join(', ') || '(אין)';
-      summaries.push(`"${file.name}": ${coverItem ? 'זוהה עמוד שער ✓' : 'ללא עמוד שער'}, ${items.length} שאלות זוהו: ${labelList}`);
+      summaries.push(`"${file.name}": ${coverItem ? 'זוהה עמוד שער ✓' : 'ללא עמוד שער'}, ${items.length} שאלות זוהו: ${labelList}<br>&nbsp;&nbsp;🔍 סה"כ ${totalTextItems} פריטי טקסט נמצאו בקובץ. דוגמה מעמוד 2: ${debugSample || '(אין טקסט בעמוד 2)'}`);
     }catch(e){
       console.error(e);
       uploadStatus.className='status err';
