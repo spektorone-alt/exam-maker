@@ -126,7 +126,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-04-v26 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-05-v27 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -723,19 +723,65 @@ async function renderBank(){
     coverPool.map(c=>`<option value="${c.id}">${c.source} (${c.subject||'כללי'})</option>`).join('');
 }
 
-// ---- persistence via window.storage ----
+// ---- persistence via IndexedDB (works in any real browser, not just Claude artifacts) ----
+const DB_NAME = 'examBuilderDB';
+const STORE_NAME = 'kv';
+function openLocalDB(){
+  return new Promise((resolve,reject)=>{
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore(STORE_NAME); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+const localStore = {
+  async get(key){
+    try{
+      const db = await openLocalDB();
+      return await new Promise((resolve,reject)=>{
+        const tx = db.transaction(STORE_NAME,'readonly');
+        const req = tx.objectStore(STORE_NAME).get(key);
+        req.onsuccess = () => resolve(req.result !== undefined ? {value: req.result} : null);
+        req.onerror = () => reject(req.error);
+      });
+    }catch(e){ console.warn('localStore.get failed', key, e); return null; }
+  },
+  async set(key, value){
+    try{
+      const db = await openLocalDB();
+      return await new Promise((resolve,reject)=>{
+        const tx = db.transaction(STORE_NAME,'readwrite');
+        tx.objectStore(STORE_NAME).put(value, key);
+        tx.oncomplete = () => resolve({key, value});
+        tx.onerror = () => reject(tx.error);
+      });
+    }catch(e){ console.warn('localStore.set failed', key, e); return null; }
+  },
+  async delete(key){
+    try{
+      const db = await openLocalDB();
+      return await new Promise((resolve,reject)=>{
+        const tx = db.transaction(STORE_NAME,'readwrite');
+        tx.objectStore(STORE_NAME).delete(key);
+        tx.oncomplete = () => resolve({key, deleted:true});
+        tx.onerror = () => reject(tx.error);
+      });
+    }catch(e){ console.warn('localStore.delete failed', key, e); return null; }
+  }
+};
+
 async function saveBank(){
   try{
-    await window.storage.set('exam-bank-items', JSON.stringify(bank), false);
-    await window.storage.set('exam-bank-covers', JSON.stringify(covers), false);
-    await window.storage.set('exam-bank-subjects', JSON.stringify(subjects), false);
+    await localStore.set('exam-bank-items', JSON.stringify(bank));
+    await localStore.set('exam-bank-covers', JSON.stringify(covers));
+    await localStore.set('exam-bank-subjects', JSON.stringify(subjects));
   }catch(e){ console.warn('שמירה נכשלה', e); }
 }
 async function loadBank(){
   try{
-    const items = await window.storage.get('exam-bank-items', false);
-    const cvs = await window.storage.get('exam-bank-covers', false);
-    const subs = await window.storage.get('exam-bank-subjects', false);
+    const items = await localStore.get('exam-bank-items');
+    const cvs = await localStore.get('exam-bank-covers');
+    const subs = await localStore.get('exam-bank-subjects');
     if(items && items.value) bank = JSON.parse(items.value);
     if(cvs && cvs.value) covers = JSON.parse(cvs.value);
     if(subs && subs.value) subjects = JSON.parse(subs.value);
@@ -749,12 +795,12 @@ let gsiLoaded = false, gapiLoaded = false, accessToken = null;
 
 async function loadDriveSettings(){
   try{
-    const r = await window.storage.get('drive-settings', false);
+    const r = await localStore.get('drive-settings');
     if(r && r.value) driveSettings = JSON.parse(r.value);
   }catch(e){}
 }
 async function saveDriveSettings(){
-  await window.storage.set('drive-settings', JSON.stringify(driveSettings), false);
+  await localStore.set('drive-settings', JSON.stringify(driveSettings));
 }
 
 function loadScriptOnce(src){
@@ -776,10 +822,15 @@ document.getElementById('driveModalCancel').addEventListener('click', ()=>{
   driveModalBackdrop.style.display = 'none';
 });
 document.getElementById('driveModalSave').addEventListener('click', async ()=>{
-  driveSettings.clientId = document.getElementById('clientIdInput').value.trim();
-  driveSettings.apiKey = document.getElementById('apiKeyInput').value.trim();
-  await saveDriveSettings();
-  driveModalBackdrop.style.display = 'none';
+  try{
+    driveSettings.clientId = document.getElementById('clientIdInput').value.trim();
+    driveSettings.apiKey = document.getElementById('apiKeyInput').value.trim();
+    await saveDriveSettings();
+    driveModalBackdrop.style.display = 'none';
+  }catch(e){
+    console.error('Failed to save drive settings', e);
+    alert('שגיאה בשמירת ההגדרות: ' + e.message);
+  }
 });
 
 async function ensureGoogleLibs(){
@@ -917,9 +968,9 @@ document.getElementById('clearBankBtn').addEventListener('click', async ()=>{
   if(!confirm('למחוק את כל המאגר השמור? פעולה זו לא ניתנת לביטול.')) return;
   bank = []; covers = []; subjects = [];
   try{
-    await window.storage.delete('exam-bank-items', false);
-    await window.storage.delete('exam-bank-covers', false);
-    await window.storage.delete('exam-bank-subjects', false);
+    await localStore.delete('exam-bank-items');
+    await localStore.delete('exam-bank-covers');
+    await localStore.delete('exam-bank-subjects');
   }catch(e){}
   refreshSubjectDropdowns();
   await renderBank();
