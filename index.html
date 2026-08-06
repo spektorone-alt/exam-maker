@@ -119,6 +119,15 @@
   .num-edit-row{display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:13px;}
   .num-edit-row input{width:90px; padding:5px 8px; border:1px solid var(--border); border-radius:6px;}
   .edited-badge{font-size:11px; background:#eefaf1; color:var(--good); border:1px solid #c6ebd2; padding:1px 8px; border-radius:10px; margin-inline-start:6px;}
+  .quota-row{
+    display:flex; align-items:center; gap:10px; padding:7px 4px; border-bottom:1px solid var(--border);
+  }
+  .quota-row:last-child{border-bottom:none;}
+  .quota-row .qname{flex:1; font-size:14px;}
+  .quota-row .qcount{color:var(--muted); font-size:12px;}
+  .quota-row input{width:64px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; text-align:center;}
+  .quota-row input[type=checkbox]{width:17px; height:17px; padding:0;}
+  #quotaTableWrap{border:1px solid var(--border); border-radius:8px; padding:4px 10px; max-height:260px; overflow-y:auto;}
 </style>
 </head>
 <body>
@@ -126,7 +135,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-05-v27 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v40 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -199,8 +208,12 @@
   <div class="card">
     <h2><span class="step-num">3</span> הרכבת מבחן חדש</h2>
     <div class="form-row">
-      <label>מקצוע לבניית המבחן ממנו:</label>
-      <select id="buildSubjectSelect"><option value="">— בחר מקצוע —</option></select>
+      <label>כמות שאלות בסה"כ במבחן:</label>
+      <input type="number" id="totalQuestions" class="num-input" min="1" value="5" style="width:120px;">
+    </div>
+    <div class="form-row">
+      <label>נושאים שהתגלו בבנק — "כלול" קובע אילו נושאים מותרים במבחן הזה (אם לא תסמנו כלום, המבחן ישאב מכל הבנק). "חובה" מבטיח שאלה אקראית אחת מהנושא (ומסמן "כלול" אוטומטית):</label>
+      <div id="quotaTableWrap"></div>
     </div>
     <div class="form-row">
       <label>עמוד שער / הוראות מתוך:</label>
@@ -210,10 +223,6 @@
         <input type="file" id="coverFileInput" accept="application/pdf" style="display:none;">
       </div>
       <div class="status" id="coverUploadStatus"></div>
-    </div>
-    <div class="form-row">
-      <label>כמות שאלות במבחן החדש:</label>
-      <input type="number" id="numQuestions" class="num-input" min="1" value="5" style="width:120px;">
     </div>
     <button class="btn" id="generateBtn">🎲 הרכב מבחן אקראי</button>
     <div class="status" id="generateStatus"></div>
@@ -248,18 +257,56 @@ const coverSelect = document.getElementById('coverSelect');
 const subjectSelect = document.getElementById('subjectSelect');
 const newSubjectInput = document.getElementById('newSubjectInput');
 const filterSubjectSelect = document.getElementById('filterSubjectSelect');
-const buildSubjectSelect = document.getElementById('buildSubjectSelect');
+const quotaTableWrap = document.getElementById('quotaTableWrap');
 const coverFileInput = document.getElementById('coverFileInput');
 const coverUploadStatus = document.getElementById('coverUploadStatus');
 const addCoverBtn = document.getElementById('addCoverBtn');
+let quotas = {}; // subject -> desired question count for the next exam
 
 function refreshSubjectDropdowns(){
+  // self-heal: make sure subjects always includes every subject actually present on a bank item
+  const derivedSubjects = bank.map(b=>b.subject).filter(Boolean);
+  subjects = [...new Set([...subjects, ...derivedSubjects])];
   const opts = subjects.map(s=>`<option value="${s}">${s}</option>`).join('');
   subjectSelect.innerHTML = '<option value="">— בחר מקצוע קיים —</option>' + opts;
   filterSubjectSelect.innerHTML = '<option value="">כל המקצועות</option>' + opts;
-  const prevBuild = buildSubjectSelect.value;
-  buildSubjectSelect.innerHTML = '<option value="">— בחר מקצוע —</option>' + opts;
-  if(subjects.includes(prevBuild)) buildSubjectSelect.value = prevBuild;
+  renderQuotaTable();
+}
+
+function renderQuotaTable(){
+  if(!subjects.length){
+    quotaTableWrap.innerHTML = '<div class="muted" style="padding:6px;">אין עדיין מקצועות בבנק — העלו קבצים למעלה קודם.</div>';
+    return;
+  }
+  quotaTableWrap.innerHTML = `
+    <div class="quota-row" style="font-size:11px; color:var(--muted); font-weight:700;">
+      <span style="width:20px;"></span>
+      <span class="qname"></span>
+      <span style="width:60px; text-align:center;">כלול</span>
+      <span style="width:60px; text-align:center;">חובה</span>
+    </div>` +
+    subjects.map(s=>{
+      const available = bank.filter(b=>b.included && b.subject===s).length;
+      const q = quotas[s] || {included:false, mandatory:false};
+      return `<div class="quota-row">
+        <span class="qname">${s}</span>
+        <span class="qcount">(${available} זמינות)</span>
+        <span style="width:60px; text-align:center; display:inline-block;"><input type="checkbox" data-subject="${s}" data-role="included" class="quota-checkbox" ${q.included?'checked':''}></span>
+        <span style="width:60px; text-align:center; display:inline-block;"><input type="checkbox" data-subject="${s}" data-role="mandatory" class="quota-checkbox" ${q.mandatory?'checked':''}></span>
+      </div>`;
+    }).join('');
+  quotaTableWrap.querySelectorAll('.quota-checkbox').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const s = cb.getAttribute('data-subject');
+      const role = cb.getAttribute('data-role');
+      if(!quotas[s]) quotas[s] = {included:false, mandatory:false};
+      quotas[s][role] = cb.checked;
+      if(role === 'mandatory' && cb.checked){
+        quotas[s].included = true; // mandatory implies included in scope
+        renderQuotaTable();
+      }
+    });
+  });
 }
 
 function currentSubjectForUpload(){
@@ -302,6 +349,62 @@ async function renderThumb(base64){
     await page.render({canvasContext: ctx, viewport}).promise;
     return canvas.toDataURL('image/png');
   }catch(e){ return null; }
+}
+
+const TOPIC_LIST = [
+  'זרם ישר - ניתוח מעגלים',
+  'זרם ישר - הספק מרבי ומשפטי תבנין ונורטון',
+  'זרם חילופין - עכבות ופאזורים',
+  'זרם חילופין - תהודה',
+  'תלת פאזי',
+  'מגנטיות',
+  'זרם חילופין - סופרפוזיציה',
+  'תופעות מעבר ואנרגיה אגורה'
+];
+
+const TOPIC_KEYWORDS = {
+  'זרם חילופין - תהודה': ['תהודה', 'גורם הטיב', 'מקדם הטיב', 'גורם טיב', 'רוחב הפס', 'רוחב הסרט', 'רוחב פס', 'BW', 'שכיחות תהודה', 'תדר תהודה'],
+  'זרם חילופין - סופרפוזיציה': ['סופרפוזיציה'],
+  'תלת פאזי': ['תלת פאזי', 'תלת-פאזי', 'תלת מופעי', 'תלת-מופעי', 'כוכב', 'משולש', 'קווי', 'RST', 'פאזי'],
+  'מגנטיות': ['מגנטי', 'מגנטית', 'ליבה', 'שטף', 'סליל', 'החדירות', 'חריץ אוויר', 'כריכות', 'AT'],
+  'תופעות מעבר ואנרגיה אגורה': ['תופעות מעבר', 'מצב תמידי', 'אנרגיה אגורה', 'קבוע זמן', 'תופעת המעבר'],
+  'זרם ישר - הספק מרבי ומשפטי תבנין ונורטון': ['תבנין', 'נורטון', 'מעגל תמורה'],
+  'זרם חילופין - עכבות ופאזורים': ['עכבה', 'פאזור', 'sin(', 'cos(', '∠', 'מתח חילופין', 'מקור חילופין', 'משרעת', 'תדר משתנה'],
+  'זרם ישר - ניתוח מעגלים': ['מתח ישר', 'מד זרם', 'מד מתח', 'מפסק']
+};
+
+async function extractQuestionText(base64, onStatus){
+  const bytes = base64ToArrayBuffer(base64);
+  const doc = await pdfjsLib.getDocument({data: bytes}).promise;
+  let allText = '';
+  for(let p=1; p<=doc.numPages; p++){
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    let items = content.items;
+    if(items.length === 0){
+      // scanned page — fall back to OCR so classification still works
+      const viewport = page.getViewport({scale:1});
+      try{ items = await ocrPageWords(page, viewport.height, onStatus); }catch(e){ items = []; }
+    }
+    allText += ' ' + items.map(i=>i.str).join(' ');
+  }
+  return allText.normalize('NFKC');
+}
+
+function classifyByKeywords(text){
+  let best = null, bestScore = 0;
+  for(const topic of Object.keys(TOPIC_KEYWORDS)){
+    const score = TOPIC_KEYWORDS[topic].filter(k => text.includes(k)).length;
+    if(score > bestScore){ bestScore = score; best = topic; }
+  }
+  return best;
+}
+
+async function classifyQuestionTopic(base64Pdf, onStatus){
+  // Free, local classification by keyword matching in the question's own text —
+  // no external API, no cost, works identically everywhere (GitHub Pages included).
+  const text = await extractQuestionText(base64Pdf, onStatus);
+  return classifyByKeywords(text);
 }
 
 let __tesseractWorkerPromise = null;
@@ -391,7 +494,7 @@ async function parsePdfFile(file, subject, onStatus){
       // no text layer at all — this page is a scanned image. Fall back to in-browser OCR.
       if(onStatus) onStatus(`עמוד ${p}: לא נמצא טקסט — מנסה OCR...`);
       try{
-        items = await ocrPageWords(page, viewport.height, onStatus);
+        items = await ocrPageWords(page, viewport.height, onStatus, 3.0);
         ocrPagesUsed++;
       }catch(e){
         console.warn('OCR failed for page', p, e);
@@ -622,6 +725,7 @@ async function handleFiles(fileList){
   registerSubject(subject);
   uploadStatus.className='status';
   const summaries = [];
+  const topicTally = {};
   for(const file of files){
     uploadStatus.innerHTML = `<span class="spinner"></span> מעבד את "${file.name}" (מקצוע: ${subject})...`;
     try{
@@ -632,6 +736,21 @@ async function handleFiles(fileList){
       const {items, coverItem, totalTextItems, debugSample, ocrPagesUsed} = await parsePdfFile(file, subject, onStatus);
       bank.push(...items);
       if(coverItem) covers.push(coverItem);
+
+      // classify each question's real topic automatically — no button needed
+      for(let i=0;i<items.length;i++){
+        uploadStatus.innerHTML = `<span class="spinner"></span> "${file.name}": מסווג שאלה ${i+1} מתוך ${items.length} לנושא...`;
+        try{
+          const topic = await classifyQuestionTopic(items[i].base64);
+          if(topic){
+            items[i].subject = topic;
+            registerSubject(topic);
+          }
+        }catch(e){ console.warn('Classification failed for', items[i].label, e); }
+        const finalTopic = items[i].subject || subject;
+        topicTally[finalTopic] = (topicTally[finalTopic]||0) + 1;
+      }
+
       const labelList = items.map(it=>it.label).join(', ') || '(אין)';
       const ocrNote = ocrPagesUsed ? ` (כולל ${ocrPagesUsed} עמודים שעברו OCR — קובץ סרוק)` : '';
       summaries.push(`"${file.name}": ${coverItem ? 'זוהה עמוד שער ✓' : 'ללא עמוד שער'}, ${items.length} שאלות זוהו${ocrNote}: ${labelList}<br>&nbsp;&nbsp;🔍 סה"כ ${totalTextItems} פריטי טקסט נמצאו בקובץ. דוגמה מעמוד 2: ${debugSample || '(אין טקסט בעמוד 2)'}`);
@@ -641,9 +760,16 @@ async function handleFiles(fileList){
       uploadStatus.textContent = `שגיאה בעיבוד "${file.name}": ${e.message}`;
     }
   }
+
+  const topicBoxHtml = Object.keys(topicTally).length ? `
+    <div style="background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-top:10px;">
+      <div style="font-weight:700; font-size:13px; margin-bottom:6px;">📚 נושאים שזוהו בשאלות שהועלו:</div>
+      ${Object.entries(topicTally).map(([t,c])=>`<div style="font-size:13px; padding:2px 0;">${t} — <b>${c}</b> שאלות</div>`).join('')}
+    </div>` : '';
+
   uploadStatus.className='status ok';
-  uploadStatus.innerHTML = `הועלו ועובדו ${files.length} קבצים תחת "${subject}". סה"כ ${bank.length} שאלות בבנק.<br>` +
-    summaries.map(s=>`• ${s}`).join('<br>');
+  uploadStatus.innerHTML = `הועלו ועובדו ${files.length} קבצים. סה"כ ${bank.length} שאלות בבנק.<br>` +
+    summaries.map(s=>`• ${s}`).join('<br>') + topicBoxHtml;
   newSubjectInput.value = '';
   await saveBank();
   refreshSubjectDropdowns();
@@ -674,10 +800,15 @@ async function renderBank(){
     for(const key of Object.keys(groups)){
       const g = groups[key];
       const includedCount = g.items.filter(i=>i.included).length;
+      const groupKey = key.replace(/"/g,'&quot;');
       html += `<details class="bank-group">
         <summary>📄 <b>${g.source}</b> <span class="tag">${g.subject||'כללי'}</span>
           <span class="muted">— ${g.items.length} שאלות (${includedCount} מסומנות)</span>
         </summary>
+        <div style="padding:8px 12px 0;">
+          <button class="btn secondary classify-group-btn" data-key="${groupKey}" style="font-size:12px;">🤖 סווג כל שאלה לנושא האמיתי שלה (AI)</button>
+          <div class="status" id="classify-status-${groupKey}"></div>
+        </div>
         <table><thead><tr>
           <th></th><th>תצוגה</th><th>שאלה</th><th>עמודים</th>
         </tr></thead><tbody>`;
@@ -701,6 +832,35 @@ async function renderBank(){
       });
     });
 
+    document.querySelectorAll('.classify-group-btn').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const key = btn.getAttribute('data-key');
+        const statusEl = document.getElementById('classify-status-'+key);
+        const groupItems = visible.filter(item => (item.subject+' || '+item.source).replace(/"/g,'&quot;') === key);
+        btn.disabled = true;
+        let done = 0;
+        for(const item of groupItems){
+          statusEl.className = 'status';
+          statusEl.innerHTML = `<span class="spinner"></span> מסווג שאלה ${done+1} מתוך ${groupItems.length} (${item.label})...`;
+          try{
+            const topic = await classifyQuestionTopic(item.base64);
+            if(topic){
+              item.subject = topic;
+              registerSubject(topic);
+            }
+          }catch(e){
+            console.error('Classification failed for', item.label, e);
+          }
+          done++;
+        }
+        await saveBank();
+        refreshSubjectDropdowns();
+        statusEl.className = 'status ok';
+        statusEl.textContent = `סווגו ${done} שאלות.`;
+        await renderBank();
+      });
+    });
+
     // only render thumbnails once a group is actually opened (keeps things fast/compact by default)
     document.querySelectorAll('.bank-group').forEach(det=>{
       det.addEventListener('toggle', function loadThumbs(){
@@ -716,11 +876,10 @@ async function renderBank(){
     });
   }
 
-  // cover options — filtered by chosen build subject if set
-  const buildSubject = buildSubjectSelect.value;
-  const coverPool = buildSubject ? covers.filter(c=>c.subject===buildSubject) : covers;
+  // cover options — show all (an exam can now span multiple subjects via the quota table)
   coverSelect.innerHTML = '<option value="">— ללא עמוד שער —</option>' +
-    coverPool.map(c=>`<option value="${c.id}">${c.source} (${c.subject||'כללי'})</option>`).join('');
+    covers.map(c=>`<option value="${c.id}">${c.source} (${c.subject||'כללי'})</option>`).join('');
+  renderQuotaTable();
 }
 
 // ---- persistence via IndexedDB (works in any real browser, not just Claude artifacts) ----
@@ -784,8 +943,11 @@ async function loadBank(){
     const subs = await localStore.get('exam-bank-subjects');
     if(items && items.value) bank = JSON.parse(items.value);
     if(cvs && cvs.value) covers = JSON.parse(cvs.value);
-    if(subs && subs.value) subjects = JSON.parse(subs.value);
-    else subjects = [...new Set(bank.map(b=>b.subject).filter(Boolean))];
+    const storedSubjects = (subs && subs.value) ? JSON.parse(subs.value) : [];
+    const derivedSubjects = [...new Set(bank.map(b=>b.subject).filter(Boolean))];
+    // union of both — guarantees a stale/incomplete stored list can never hide a topic
+    // that actually exists on a bank item (e.g. from auto-classification after upload)
+    subjects = [...new Set([...storedSubjects, ...derivedSubjects])];
   }catch(e){ /* no saved bank yet */ }
 }
 
@@ -832,6 +994,7 @@ document.getElementById('driveModalSave').addEventListener('click', async ()=>{
     alert('שגיאה בשמירת ההגדרות: ' + e.message);
   }
 });
+
 
 async function ensureGoogleLibs(){
   if(!gsiLoaded){ await loadScriptOnce('https://accounts.google.com/gsi/client'); gsiLoaded = true; }
@@ -933,10 +1096,10 @@ dropZone.addEventListener('drop', (e)=>{ handleFiles(e.dataTransfer.files); });
 async function handleCoverFile(fileList){
   const file = Array.from(fileList).find(f=>f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
   if(!file) return;
-  const subject = buildSubjectSelect.value;
+  const subject = currentSubjectForUpload();
   if(!subject){
     coverUploadStatus.className='status err';
-    coverUploadStatus.textContent = 'נא לבחור קודם "מקצוע לבניית המבחן ממנו" למעלה, ואז להעלות את עמוד השער.';
+    coverUploadStatus.textContent = 'נא לבחור/להקליד מקצוע בסעיף 1 למעלה, ואז להעלות את עמוד השער.';
     return;
   }
   coverUploadStatus.className='status';
@@ -976,7 +1139,6 @@ document.getElementById('clearBankBtn').addEventListener('click', async ()=>{
   await renderBank();
 });
 filterSubjectSelect.addEventListener('change', renderBank);
-buildSubjectSelect.addEventListener('change', renderBank);
 
 let currentSelection = []; // items chosen for the exam currently being built, may include per-item edits
 
@@ -1266,22 +1428,61 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
   const genStatus = document.getElementById('generateStatus');
   document.getElementById('reviewArea').innerHTML = '';
   document.getElementById('downloadArea').innerHTML = '';
-  const n = parseInt(document.getElementById('numQuestions').value, 10);
-  const buildSubject = buildSubjectSelect.value;
-  if(!buildSubject){
-    genStatus.className='status err'; genStatus.textContent='נא לבחור מקצוע לבניית המבחן ממנו.'; return;
+
+  const total = parseInt(document.getElementById('totalQuestions').value, 10);
+  if(!total || total < 1){
+    genStatus.className='status err'; genStatus.textContent='נא להזין כמות שאלות כוללת תקינה.'; return;
   }
-  const included = bank.filter(b=>b.included && b.subject===buildSubject);
-  if(!n || n<1){ genStatus.className='status err'; genStatus.textContent='נא להזין מספר שאלות תקין.'; return; }
-  if(n > included.length){
+
+  const includedSubjects = Object.keys(quotas).filter(s => quotas[s] && quotas[s].included);
+  const mandatorySubjects = Object.keys(quotas).filter(s => quotas[s] && quotas[s].mandatory);
+  // if nothing is explicitly scoped, the exam draws from the whole bank (backward compatible default)
+  const scopeSubjects = includedSubjects.length ? includedSubjects : subjects;
+
+  if(mandatorySubjects.length > total){
     genStatus.className='status err';
-    genStatus.textContent = `במקצוע "${buildSubject}" יש רק ${included.length} שאלות מסומנות, לא ניתן לבחור ${n}.`;
+    genStatus.textContent = `סימנת ${mandatorySubjects.length} נושאים כחובה, אבל ביקשת רק ${total} שאלות בסה"כ. הגדל את הסה"כ או בטל חלק מהחובה.`;
     return;
   }
-  const shuffled = [...included].sort(()=>Math.random()-0.5);
-  currentSelection = shuffled.slice(0, n).map(it=>({...it, _edited:false, _editedBase64:null, _detectedNums:null}));
+  // validate availability per mandatory subject
+  for(const s of mandatorySubjects){
+    const available = bank.filter(b=>b.included && b.subject===s).length;
+    if(available < 1){
+      genStatus.className='status err';
+      genStatus.textContent = `בנושא "${s}" אין שאלות מסומנות זמינות בבנק, אי אפשר להבטיח ממנו שאלה.`;
+      return;
+    }
+  }
+
+  // step 1: draw exactly one random question from each mandatory topic
+  let picked = [];
+  for(const s of mandatorySubjects){
+    const pool = bank.filter(b=>b.included && b.subject===s);
+    const pick = pool[Math.floor(Math.random()*pool.length)];
+    picked.push(pick);
+  }
+
+  // step 2: fill the rest randomly, but ONLY from topics within this exam's scope (not the whole bank,
+  // unless no scope was defined at all) — this is what keeps a "DC-only" exam from pulling in AC questions
+  const remaining = total - picked.length;
+  const pickedIds = new Set(picked.map(p=>p.id));
+  const restPool = bank.filter(b => b.included && scopeSubjects.includes(b.subject) && !pickedIds.has(b.id));
+  if(remaining > restPool.length){
+    genStatus.className='status err';
+    genStatus.textContent = `אין מספיק שאלות זמינות בתחום שהוגדר (${scopeSubjects.join(', ')}) כדי להשלים ל-${total} (יש עוד ${restPool.length} זמינות מעבר לנושאי החובה).`;
+    return;
+  }
+  const shuffledRest = [...restPool].sort(()=>Math.random()-0.5);
+  picked = picked.concat(shuffledRest.slice(0, remaining));
+
+  // shuffle the final combined set so topics interleave rather than appearing in fixed blocks
+  picked = picked.sort(()=>Math.random()-0.5);
+
+  currentSelection = picked.map(it=>({...it, _edited:false, _editedBase64:null, _detectedNums:null}));
   genStatus.className='status ok';
-  genStatus.textContent = `נבחרו ${n} שאלות. אפשר לערוך מספרים בכל שאלה למטה, ואז ללחוץ "הפק PDF סופי".`;
+  const scopeSummary = includedSubjects.length ? ` (תחום: ${includedSubjects.join(', ')})` : ' (תחום: כל הבנק)';
+  const minSummary = mandatorySubjects.length ? ` | נושאי חובה: ${mandatorySubjects.join(', ')}` : '';
+  genStatus.textContent = `נבחרו ${currentSelection.length} שאלות מתוך ${total} שביקשת${scopeSummary}${minSummary}. אפשר לערוך מספרים בכל שאלה למטה, ואז ללחוץ "הפק PDF סופי".`;
   await renderReview();
 });
 
