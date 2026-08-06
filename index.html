@@ -135,7 +135,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v40 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v44 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -164,6 +164,17 @@
   </div>
 
   <!-- Google Drive settings modal -->
+  <!-- Full-screen question preview modal -->
+  <div id="previewModalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(10,15,30,.85); z-index:60; align-items:center; justify-content:center; padding:16px;">
+    <div style="background:#fff; border-radius:12px; max-width:900px; width:100%; max-height:92vh; display:flex; flex-direction:column; overflow:hidden;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border);">
+        <div id="previewModalTitle" style="font-weight:700; font-size:14px;"></div>
+        <button class="btn secondary" id="previewModalClose" style="font-size:12px;">✕ סגור</button>
+      </div>
+      <div id="previewModalBody" style="overflow-y:auto; padding:16px; flex:1;"></div>
+    </div>
+  </div>
+
   <div id="driveModalBackdrop" style="display:none; position:fixed; inset:0; background:rgba(20,30,60,.45); z-index:50; align-items:center; justify-content:center;">
     <div class="card" style="max-width:460px; width:90%; margin:0;">
       <h2>⚙️ הגדרות חיבור ל-Google Drive</h2>
@@ -312,7 +323,7 @@ function renderQuotaTable(){
 function currentSubjectForUpload(){
   const typed = newSubjectInput.value.trim();
   if(typed) return typed;
-  return subjectSelect.value || 'כללי';
+  return subjectSelect.value || 'זרם ישר - ניתוח מעגלים';
 }
 
 function registerSubject(name){
@@ -349,6 +360,31 @@ async function renderThumb(base64){
     await page.render({canvasContext: ctx, viewport}).promise;
     return canvas.toDataURL('image/png');
   }catch(e){ return null; }
+}
+
+async function showQuestionPreview(item){
+  const backdrop = document.getElementById('previewModalBackdrop');
+  const body = document.getElementById('previewModalBody');
+  document.getElementById('previewModalTitle').textContent = `${item.label} — ${item.source} (${item.subject||''})`;
+  body.innerHTML = '<div style="padding:30px; text-align:center;"><span class="spinner"></span> טוען תצוגה מקדימה...</div>';
+  backdrop.style.display = 'flex';
+  try{
+    const bytes = base64ToArrayBuffer(item.base64);
+    const doc = await pdfjsLib.getDocument({data: bytes}).promise;
+    let html = '';
+    for(let p=1; p<=doc.numPages; p++){
+      const page = await doc.getPage(p);
+      const viewport = page.getViewport({scale: 2});
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      await page.render({canvasContext: ctx, viewport}).promise;
+      html += `<img src="${canvas.toDataURL('image/png')}" style="width:100%; max-width:800px; display:block; margin:0 auto 12px; border:1px solid var(--border); border-radius:6px;">`;
+    }
+    body.innerHTML = html;
+  }catch(e){
+    body.innerHTML = `<div style="padding:30px; text-align:center; color:var(--danger);">שגיאה בטעינת התצוגה: ${e.message}</div>`;
+  }
 }
 
 const TOPIC_LIST = [
@@ -391,13 +427,23 @@ async function extractQuestionText(base64, onStatus){
   return allText.normalize('NFKC');
 }
 
+const AC_SIGNALS = ['sin(', 'cos(', '∠', 'Hz', 'rad', 'חילופין', 'משרעת', 'תדר', '°', 'ω', 'עכבה', 'פאזור'];
+const DC_SIGNALS = ['זרם ישר', 'מתח ישר', 'DC', 'קבוע'];
+
 function classifyByKeywords(text){
   let best = null, bestScore = 0;
   for(const topic of Object.keys(TOPIC_KEYWORDS)){
     const score = TOPIC_KEYWORDS[topic].filter(k => text.includes(k)).length;
     if(score > bestScore){ bestScore = score; best = topic; }
   }
-  return best;
+  if(best) return best;
+
+  // fallback: no specific topic matched — still decide AC vs DC using broader generic
+  // signals, so nothing is ever left unclassified under the generic upload subject.
+  const acScore = AC_SIGNALS.filter(k => text.includes(k)).length;
+  const dcScore = DC_SIGNALS.filter(k => text.includes(k)).length;
+  if(acScore > dcScore) return 'זרם חילופין - עכבות ופאזורים';
+  return 'זרם ישר - ניתוח מעגלים';
 }
 
 async function classifyQuestionTopic(base64Pdf, onStatus){
@@ -742,13 +788,13 @@ async function handleFiles(fileList){
         uploadStatus.innerHTML = `<span class="spinner"></span> "${file.name}": מסווג שאלה ${i+1} מתוך ${items.length} לנושא...`;
         try{
           const topic = await classifyQuestionTopic(items[i].base64);
-          if(topic){
-            items[i].subject = topic;
-            registerSubject(topic);
-          }
-        }catch(e){ console.warn('Classification failed for', items[i].label, e); }
-        const finalTopic = items[i].subject || subject;
-        topicTally[finalTopic] = (topicTally[finalTopic]||0) + 1;
+          items[i].subject = topic || 'זרם ישר - ניתוח מעגלים';
+        }catch(e){
+          console.warn('Classification failed for', items[i].label, e);
+          items[i].subject = 'זרם ישר - ניתוח מעגלים'; // never leave the generic upload placeholder
+        }
+        registerSubject(items[i].subject);
+        topicTally[items[i].subject] = (topicTally[items[i].subject]||0) + 1;
       }
 
       const labelList = items.map(it=>it.label).join(', ') || '(אין)';
@@ -805,18 +851,14 @@ async function renderBank(){
         <summary>📄 <b>${g.source}</b> <span class="tag">${g.subject||'כללי'}</span>
           <span class="muted">— ${g.items.length} שאלות (${includedCount} מסומנות)</span>
         </summary>
-        <div style="padding:8px 12px 0;">
-          <button class="btn secondary classify-group-btn" data-key="${groupKey}" style="font-size:12px;">🤖 סווג כל שאלה לנושא האמיתי שלה (AI)</button>
-          <div class="status" id="classify-status-${groupKey}"></div>
-        </div>
         <table><thead><tr>
           <th></th><th>תצוגה</th><th>שאלה</th><th>עמודים</th>
         </tr></thead><tbody>`;
       for(const item of g.items){
         html += `<tr>
           <td><input type="checkbox" data-id="${item.id}" class="incl-cb" ${item.included?'checked':''}></td>
-          <td><img class="thumb" id="thumb-${item.id}" src="" alt=""></td>
-          <td><b>${item.label}</b></td>
+          <td><img class="thumb preview-trigger" id="thumb-${item.id}" data-id="${item.id}" src="" alt="" style="cursor:pointer;"></td>
+          <td><b class="preview-trigger" data-id="${item.id}" style="cursor:pointer; text-decoration:underline;">${item.label}</b></td>
           <td class="muted">${item.pages.length}</td>
         </tr>`;
       }
@@ -832,32 +874,11 @@ async function renderBank(){
       });
     });
 
-    document.querySelectorAll('.classify-group-btn').forEach(btn=>{
-      btn.addEventListener('click', async ()=>{
-        const key = btn.getAttribute('data-key');
-        const statusEl = document.getElementById('classify-status-'+key);
-        const groupItems = visible.filter(item => (item.subject+' || '+item.source).replace(/"/g,'&quot;') === key);
-        btn.disabled = true;
-        let done = 0;
-        for(const item of groupItems){
-          statusEl.className = 'status';
-          statusEl.innerHTML = `<span class="spinner"></span> מסווג שאלה ${done+1} מתוך ${groupItems.length} (${item.label})...`;
-          try{
-            const topic = await classifyQuestionTopic(item.base64);
-            if(topic){
-              item.subject = topic;
-              registerSubject(topic);
-            }
-          }catch(e){
-            console.error('Classification failed for', item.label, e);
-          }
-          done++;
-        }
-        await saveBank();
-        refreshSubjectDropdowns();
-        statusEl.className = 'status ok';
-        statusEl.textContent = `סווגו ${done} שאלות.`;
-        await renderBank();
+    document.querySelectorAll('.preview-trigger').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const id = el.getAttribute('data-id');
+        const item = bank.find(b=>b.id===id);
+        if(item) showQuestionPreview(item);
       });
     });
 
@@ -982,6 +1003,14 @@ document.getElementById('driveSettingsBtn').addEventListener('click', ()=>{
 });
 document.getElementById('driveModalCancel').addEventListener('click', ()=>{
   driveModalBackdrop.style.display = 'none';
+});
+
+const previewModalBackdrop = document.getElementById('previewModalBackdrop');
+document.getElementById('previewModalClose').addEventListener('click', ()=>{
+  previewModalBackdrop.style.display = 'none';
+});
+previewModalBackdrop.addEventListener('click', (e)=>{
+  if(e.target === previewModalBackdrop) previewModalBackdrop.style.display = 'none';
 });
 document.getElementById('driveModalSave').addEventListener('click', async ()=>{
   try{
