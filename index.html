@@ -94,7 +94,12 @@
   }
   .footer-note{font-size:12px; color:var(--muted); text-align:center; padding:10px;}
   #bankTableWrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
-  #bankTableWrap table{ min-width:480px; }
+  #bankTableWrap table{ width:100%; table-layout:fixed; }
+  #bankTableWrap td, #bankTableWrap th{ overflow:hidden; text-overflow:ellipsis; }
+  @media (max-width:480px){
+    #bankTableWrap .col-pages{ display:none; }
+    #bankTableWrap .thumb{ width:36px; height:46px; }
+  }
   .bank-group{
     border:1px solid var(--border); border-radius:10px; margin-bottom:10px; overflow:hidden;
   }
@@ -135,7 +140,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v44 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v45 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -852,14 +857,14 @@ async function renderBank(){
           <span class="muted">— ${g.items.length} שאלות (${includedCount} מסומנות)</span>
         </summary>
         <table><thead><tr>
-          <th></th><th>תצוגה</th><th>שאלה</th><th>עמודים</th>
+          <th style="width:30px;"></th><th style="width:60px;">תצוגה</th><th>שאלה</th><th class="col-pages" style="width:60px;">עמודים</th>
         </tr></thead><tbody>`;
       for(const item of g.items){
         html += `<tr>
           <td><input type="checkbox" data-id="${item.id}" class="incl-cb" ${item.included?'checked':''}></td>
           <td><img class="thumb preview-trigger" id="thumb-${item.id}" data-id="${item.id}" src="" alt="" style="cursor:pointer;"></td>
           <td><b class="preview-trigger" data-id="${item.id}" style="cursor:pointer; text-decoration:underline;">${item.label}</b></td>
-          <td class="muted">${item.pages.length}</td>
+          <td class="muted col-pages">${item.pages.length}</td>
         </tr>`;
       }
       html += `</tbody></table></details>`;
