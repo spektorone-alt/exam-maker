@@ -140,7 +140,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v45 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v46 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -407,7 +407,7 @@ const TOPIC_KEYWORDS = {
   'זרם חילופין - תהודה': ['תהודה', 'גורם הטיב', 'מקדם הטיב', 'גורם טיב', 'רוחב הפס', 'רוחב הסרט', 'רוחב פס', 'BW', 'שכיחות תהודה', 'תדר תהודה'],
   'זרם חילופין - סופרפוזיציה': ['סופרפוזיציה'],
   'תלת פאזי': ['תלת פאזי', 'תלת-פאזי', 'תלת מופעי', 'תלת-מופעי', 'כוכב', 'משולש', 'קווי', 'RST', 'פאזי'],
-  'מגנטיות': ['מגנטי', 'מגנטית', 'ליבה', 'שטף', 'סליל', 'החדירות', 'חריץ אוויר', 'כריכות', 'AT'],
+  'מגנטיות': ['מגנטי', 'מגנטית', 'ליבה', 'שטף', 'החדירות', 'חריץ אוויר', 'כריכות', 'AT'],
   'תופעות מעבר ואנרגיה אגורה': ['תופעות מעבר', 'מצב תמידי', 'אנרגיה אגורה', 'קבוע זמן', 'תופעת המעבר'],
   'זרם ישר - הספק מרבי ומשפטי תבנין ונורטון': ['תבנין', 'נורטון', 'מעגל תמורה'],
   'זרם חילופין - עכבות ופאזורים': ['עכבה', 'פאזור', 'sin(', 'cos(', '∠', 'מתח חילופין', 'מקור חילופין', 'משרעת', 'תדר משתנה'],
@@ -436,6 +436,12 @@ const AC_SIGNALS = ['sin(', 'cos(', '∠', 'Hz', 'rad', 'חילופין', 'מש�
 const DC_SIGNALS = ['זרם ישר', 'מתח ישר', 'DC', 'קבוע'];
 
 function classifyByKeywords(text){
+  // priority check: a DC source (V_DC) combined with an AC source (sin/cos) in the SAME
+  // question is a classic superposition problem, even if the word "סופרפוזיציה" never appears.
+  const hasDcSource = /V\s*_?\s*DC|VDC/i.test(text) || text.includes('מקור מתח ישר');
+  const hasAcSource = text.includes('sin(') || text.includes('cos(');
+  if(hasDcSource && hasAcSource) return 'זרם חילופין - סופרפוזיציה';
+
   let best = null, bestScore = 0;
   for(const topic of Object.keys(TOPIC_KEYWORDS)){
     const score = TOPIC_KEYWORDS[topic].filter(k => text.includes(k)).length;
