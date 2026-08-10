@@ -140,7 +140,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v46 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v49 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -436,11 +436,24 @@ const AC_SIGNALS = ['sin(', 'cos(', '∠', 'Hz', 'rad', 'חילופין', 'מש�
 const DC_SIGNALS = ['זרם ישר', 'מתח ישר', 'DC', 'קבוע'];
 
 function classifyByKeywords(text){
-  // priority check: a DC source (V_DC) combined with an AC source (sin/cos) in the SAME
-  // question is a classic superposition problem, even if the word "סופרפוזיציה" never appears.
   const hasDcSource = /V\s*_?\s*DC|VDC/i.test(text) || text.includes('מקור מתח ישר');
-  const hasAcSource = text.includes('sin(') || text.includes('cos(');
-  if(hasDcSource && hasAcSource) return 'זרם חילופין - סופרפוזיציה';
+
+  // extract distinct angular-frequency values appearing right inside sin(/cos( expressions,
+  // e.g. "6·sin(200·π·t+60°)" and "10·sin(500·t−75°)" -> frequencies 200 and 500.
+  const freqMatches = [...text.matchAll(/(?:sin|cos)\(\s*([\d.]+)/g)].map(m => m[1]);
+  const distinctFreqs = new Set(freqMatches);
+  const hasAcSource = distinctFreqs.size > 0;
+
+  // superposition is specifically about sources at DIFFERENT frequencies (DC counts as
+  // frequency 0) that must be solved separately and then combined — not just "multiple
+  // sources" in general, which is common in plain circuit-analysis problems too.
+  if((hasDcSource && hasAcSource) || distinctFreqs.size >= 2) return 'זרם חילופין - סופרפוזיציה';
+
+  // priority check: a DC-only source together with a capacitor and/or inductor (μF/mH units)
+  // is almost always a switching/transient problem (charge/discharge, stored energy),
+  // even if "תופעות מעבר" isn't explicitly written.
+  const hasReactiveComponent = /μF|nF|pF|mH|μH/.test(text);
+  if(hasDcSource && !hasAcSource && hasReactiveComponent) return 'תופעות מעבר ואנרגיה אגורה';
 
   let best = null, bestScore = 0;
   for(const topic of Object.keys(TOPIC_KEYWORDS)){
@@ -1359,22 +1372,37 @@ async function renderReview(){
   document.getElementById('downloadArea').innerHTML = '';
   if(!currentSelection.length){ reviewArea.innerHTML = ''; return; }
 
-  let html = `<div class="card" style="padding:14px;"><h2 style="font-size:15px; margin-bottom:10px;">בחירה נוכחית — אפשר לערוך מספרים לפני ההפקה</h2>`;
+  let html = `<div class="card" style="padding:14px;"><h2 style="font-size:15px; margin-bottom:10px;">בחירה נוכחית — לחצו על תמונה/שם לתצוגה מקדימה, אפשר לערוך מספרים או לסמן להחלפה</h2>`;
   currentSelection.forEach((item, i)=>{
     html += `<div class="review-item" data-idx="${i}">
-      <img class="rthumb" id="rthumb-${i}" src="" alt="">
+      <img class="rthumb preview-trigger" id="rthumb-${i}" data-ridx="${i}" src="" alt="" style="cursor:pointer;">
       <div class="rmain">
-        <div class="rtitle">${i+1}. ${item.label} <span class="muted">(${item.source})</span>${item._edited ? '<span class="edited-badge">✏️ נערך</span>':''}</div>
+        <div class="rtitle">${i+1}. <span class="preview-trigger" data-ridx="${i}" style="cursor:pointer; text-decoration:underline;">${item.label}</span> <span class="muted">(${item.source})</span>${item._edited ? '<span class="edited-badge">✏️ נערך</span>':''}</div>
         ${item._justSaved ? '<div style="color:var(--good); font-size:12.5px; font-weight:700; margin-top:2px;">✅ נשמר בהצלחה!</div>' : ''}
+        ${item._justReplaced ? '<div style="color:var(--good); font-size:12.5px; font-weight:700; margin-top:2px;">🔄 הוחלפה בשאלה אחרת!</div>' : ''}
         <div class="row-actions" style="margin-top:6px;">
           <button class="btn secondary edit-nums-btn" data-idx="${i}" style="font-size:12px;">✏️ ערוך מספרים</button>
+          <label style="font-size:12px; display:flex; align-items:center; gap:4px; cursor:pointer;">
+            <input type="checkbox" class="replace-cb" data-idx="${i}"> 🔄 סמן להחלפה
+          </label>
         </div>
         <div class="redit-panel" id="editpanel-${i}" style="display:none;"></div>
       </div>
     </div>`;
   });
-  html += `<button class="btn" id="finalizeBtn" style="margin-top:8px;">📄 הפק PDF סופי</button></div>`;
+  html += `<div class="row-actions" style="margin-top:8px;">
+    <button class="btn" id="finalizeBtn">📄 הפק PDF סופי</button>
+    <button class="btn secondary" id="replaceMarkedBtn">🔄 החלף שאלות מסומנות</button>
+  </div></div>`;
   reviewArea.innerHTML = html;
+
+  document.querySelectorAll('.preview-trigger[data-ridx]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const idx = parseInt(el.getAttribute('data-ridx'),10);
+      const item = currentSelection[idx];
+      if(item) showQuestionPreview(item);
+    });
+  });
 
   currentSelection.forEach((item,i)=>{
     const img = document.getElementById('rthumb-'+i);
@@ -1524,6 +1552,35 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
   const minSummary = mandatorySubjects.length ? ` | נושאי חובה: ${mandatorySubjects.join(', ')}` : '';
   genStatus.textContent = `נבחרו ${currentSelection.length} שאלות מתוך ${total} שביקשת${scopeSummary}${minSummary}. אפשר לערוך מספרים בכל שאלה למטה, ואז ללחוץ "הפק PDF סופי".`;
   await renderReview();
+});
+
+document.addEventListener('click', async (e)=>{
+  if(e.target.id !== 'replaceMarkedBtn') return;
+  const genStatus = document.getElementById('generateStatus');
+  const checkboxes = document.querySelectorAll('.replace-cb:checked');
+  if(!checkboxes.length){
+    genStatus.className='status err'; genStatus.textContent='לא סימנת אף שאלה להחלפה.'; return;
+  }
+  const currentIds = new Set(currentSelection.map(it=>it.id));
+  let replacedCount = 0, failedLabels = [];
+  checkboxes.forEach(cb=>{
+    const idx = parseInt(cb.getAttribute('data-idx'),10);
+    const oldItem = currentSelection[idx];
+    if(!oldItem) return;
+    const pool = bank.filter(b => b.included && b.subject === oldItem.subject && !currentIds.has(b.id));
+    if(!pool.length){ failedLabels.push(oldItem.label); return; }
+    const newItem = pool[Math.floor(Math.random()*pool.length)];
+    currentIds.delete(oldItem.id);
+    currentIds.add(newItem.id);
+    currentSelection[idx] = {...newItem, _edited:false, _editedBase64:null, _detectedNums:null, _justReplaced:true};
+    replacedCount++;
+  });
+  genStatus.className = failedLabels.length ? 'status err' : 'status ok';
+  genStatus.textContent = failedLabels.length
+    ? `הוחלפו ${replacedCount} שאלות. לא נמצאה שאלה חלופית מאותו נושא עבור: ${failedLabels.join(', ')}.`
+    : `הוחלפו ${replacedCount} שאלות בהצלחה.`;
+  await renderReview();
+  setTimeout(()=>{ currentSelection.forEach(it=>{ it._justReplaced=false; }); renderReview(); }, 3000);
 });
 
 document.addEventListener('click', async (e)=>{
