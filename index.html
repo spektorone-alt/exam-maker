@@ -140,7 +140,7 @@
 <header>
   <h1>🧮 מרכיב מבחנים אוטומטי</h1>
   <p>מעלים מאגר PDF של מבחנים קיימים → המערכת מפרקת לשאלות בודדות → בוחרים כמות → מקבלים מבחן חדש אקראי, עם המבנה המקורי בדיוק</p>
-  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v49 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
+  <p style="font-size:11px; opacity:.6; margin-top:8px;">גרסת קוד: 2026-08-06-v50 — אם זה לא המספר הזה, הדפדפן טוען גרסה ישנה</p>
 </header>
 
 <div class="wrap">
@@ -438,22 +438,31 @@ const DC_SIGNALS = ['זרם ישר', 'מתח ישר', 'DC', 'קבוע'];
 function classifyByKeywords(text){
   const hasDcSource = /V\s*_?\s*DC|VDC/i.test(text) || text.includes('מקור מתח ישר');
 
+  // reactance labels (X_L, X_C, XL1, XC2, etc.) only ever appear in AC problems — never DC.
+  // This is a robust signal that doesn't depend on symbols like "∠" or "Ω" that some PDFs
+  // encode with different Unicode look-alike characters and can silently fail to match.
+  const hasReactanceLabel = /X\s*_?\s*[LC]\s*\d*/.test(text);
+
   // extract distinct angular-frequency values appearing right inside sin(/cos( expressions,
   // e.g. "6·sin(200·π·t+60°)" and "10·sin(500·t−75°)" -> frequencies 200 and 500.
   const freqMatches = [...text.matchAll(/(?:sin|cos)\(\s*([\d.]+)/g)].map(m => m[1]);
   const distinctFreqs = new Set(freqMatches);
-  const hasAcSource = distinctFreqs.size > 0;
+  const hasAcSource = distinctFreqs.size > 0 || hasReactanceLabel;
 
   // superposition is specifically about sources at DIFFERENT frequencies (DC counts as
   // frequency 0) that must be solved separately and then combined — not just "multiple
   // sources" in general, which is common in plain circuit-analysis problems too.
-  if((hasDcSource && hasAcSource) || distinctFreqs.size >= 2) return 'זרם חילופין - סופרפוזיציה';
+  if((hasDcSource && distinctFreqs.size > 0) || distinctFreqs.size >= 2) return 'זרם חילופין - סופרפוזיציה';
 
   // priority check: a DC-only source together with a capacitor and/or inductor (μF/mH units)
   // is almost always a switching/transient problem (charge/discharge, stored energy),
   // even if "תופעות מעבר" isn't explicitly written.
   const hasReactiveComponent = /μF|nF|pF|mH|μH/.test(text);
   if(hasDcSource && !hasAcSource && hasReactiveComponent) return 'תופעות מעבר ואנרגיה אגורה';
+
+  // reactance labels are an unambiguous, encoding-independent AC signal — route directly
+  // to the impedance/phasor topic rather than relying on symbols that can fail to extract.
+  if(hasReactanceLabel) return 'זרם חילופין - עכבות ופאזורים';
 
   let best = null, bestScore = 0;
   for(const topic of Object.keys(TOPIC_KEYWORDS)){
